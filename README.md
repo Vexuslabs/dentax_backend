@@ -1,1 +1,0 @@
-# dentax_backend

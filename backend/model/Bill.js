@@ -108,10 +108,20 @@ const billSchema = new mongoose.Schema(
   }
 );
 
-// Virtual alias: phone
-billSchema.virtual('phone').get(function () {
-  return this.phoneNumber;
+// Virtual aliases for Flutter compatibility & dynamic patient resolution
+billSchema.virtual('patientId').get(function () {
+  return this.patient;
 });
+billSchema.virtual('name').get(function () {
+  return (this.patient && this.patient.name) ? this.patient.name : this.patientName;
+});
+billSchema.virtual('mobileNumber').get(function () {
+  return (this.patient && this.patient.mobileNumber) ? this.patient.mobileNumber : this.phoneNumber;
+});
+billSchema.virtual('phone').get(function () {
+  return (this.patient && this.patient.mobileNumber) ? this.patient.mobileNumber : this.phoneNumber;
+});
+
 
 // Auto-generate invoice number if missing before save
 billSchema.pre('save', async function (next) {

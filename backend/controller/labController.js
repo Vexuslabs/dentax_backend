@@ -58,7 +58,8 @@ const createLabOrder = async (req, res, next) => {
         });
       }
 
-      if (!resolvedPatientName) resolvedPatientName = resolvedPatient.name;
+      // Dynamically fetch patient details from the database record
+      resolvedPatientName = resolvedPatient.name;
     } else {
       if (!resolvedPatientName) {
         return res.status(400).json({
@@ -121,6 +122,8 @@ const createLabOrder = async (req, res, next) => {
       workStatus: workStatus || status || 'Pending',
       notes: notes || ''
     });
+
+    await labOrder.populate('patient');
 
     res.status(201).json({
       success: true,
@@ -237,6 +240,7 @@ const updateLabOrder = async (req, res, next) => {
       const patientDoc = await Patient.findById(targetPatientId);
       if (patientDoc && isOwnerOrAdmin(req, patientDoc)) {
         updateData.patient = patientDoc._id;
+        updateData.patientName = patientDoc.name;
       }
     }
 

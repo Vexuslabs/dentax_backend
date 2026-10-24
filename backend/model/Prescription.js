@@ -72,6 +72,23 @@ const prescriptionSchema = new mongoose.Schema(
   }
 );
 
+// Virtual aliases for Flutter compatibility & dynamic patient resolution
+prescriptionSchema.virtual('patientId').get(function () {
+  return this.patient;
+});
+prescriptionSchema.virtual('name').get(function () {
+  return (this.patient && this.patient.name) ? this.patient.name : this.patientName;
+});
+prescriptionSchema.virtual('phoneNumber').get(function () {
+  return (this.patient && this.patient.mobileNumber) ? this.patient.mobileNumber : '';
+});
+prescriptionSchema.virtual('mobileNumber').get(function () {
+  return (this.patient && this.patient.mobileNumber) ? this.patient.mobileNumber : '';
+});
+prescriptionSchema.virtual('phone').get(function () {
+  return (this.patient && this.patient.mobileNumber) ? this.patient.mobileNumber : '';
+});
+
 // Virtual alias: notes (maps to diagnosis)
 prescriptionSchema.virtual('notes').get(function () {
   return this.diagnosis;
@@ -83,3 +100,4 @@ prescriptionSchema.virtual('date').get(function () {
 });
 
 export default mongoose.model('Prescription', prescriptionSchema);
+

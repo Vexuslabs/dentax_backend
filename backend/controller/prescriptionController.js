@@ -44,7 +44,8 @@ const createPrescription = async (req, res, next) => {
         });
       }
 
-      if (!resolvedPatientName) resolvedPatientName = resolvedPatient.name;
+      // Dynamically fetch patient details from the database record
+      resolvedPatientName = resolvedPatient.name;
     } else {
       if (!resolvedPatientName) {
         return res.status(400).json({
@@ -105,6 +106,8 @@ const createPrescription = async (req, res, next) => {
       status: status || 'Active',
       followUpDate: followUpDate || ''
     });
+
+    await prescription.populate('patient');
 
     res.status(201).json({
       success: true,
@@ -237,6 +240,7 @@ const updatePrescription = async (req, res, next) => {
       const patientDoc = await Patient.findById(targetPatientId);
       if (patientDoc && isOwnerOrAdmin(req, patientDoc)) {
         updateData.patient = patientDoc._id;
+        updateData.patientName = patientDoc.name;
       }
     }
 

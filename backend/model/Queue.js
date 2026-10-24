@@ -62,4 +62,19 @@ const queueSchema = new mongoose.Schema(
   }
 );
 
+// Virtual aliases for Flutter compatibility & dynamic patient resolution
+queueSchema.virtual('patientId').get(function () {
+  return this.patient;
+});
+queueSchema.virtual('name').get(function () {
+  return (this.patient && this.patient.name) ? this.patient.name : this.patientName;
+});
+queueSchema.virtual('mobileNumber').get(function () {
+  return (this.patient && this.patient.mobileNumber) ? this.patient.mobileNumber : this.phoneNumber;
+});
+queueSchema.virtual('phone').get(function () {
+  return (this.patient && this.patient.mobileNumber) ? this.patient.mobileNumber : this.phoneNumber;
+});
+
 export default mongoose.model('Queue', queueSchema);
+

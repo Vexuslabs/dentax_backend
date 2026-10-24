@@ -90,6 +90,23 @@ const labSchema = new mongoose.Schema(
   }
 );
 
+// Virtual aliases for Flutter compatibility & dynamic patient resolution
+labSchema.virtual('patientId').get(function () {
+  return this.patient;
+});
+labSchema.virtual('name').get(function () {
+  return (this.patient && this.patient.name) ? this.patient.name : this.patientName;
+});
+labSchema.virtual('phoneNumber').get(function () {
+  return (this.patient && this.patient.mobileNumber) ? this.patient.mobileNumber : '';
+});
+labSchema.virtual('mobileNumber').get(function () {
+  return (this.patient && this.patient.mobileNumber) ? this.patient.mobileNumber : '';
+});
+labSchema.virtual('phone').get(function () {
+  return (this.patient && this.patient.mobileNumber) ? this.patient.mobileNumber : '';
+});
+
 // Virtual alias: teeth (maps selectedTeeth strings to numbers for Tooth Chart)
 labSchema.virtual('teeth').get(function () {
   if (!this.selectedTeeth) return [];
@@ -102,3 +119,4 @@ labSchema.virtual('total').get(function () {
 });
 
 export default mongoose.model('Lab', labSchema);
+

@@ -96,4 +96,19 @@ const patientVisitSchema = new mongoose.Schema(
   }
 );
 
+// Virtual aliases for Flutter compatibility & dynamic patient resolution
+patientVisitSchema.virtual('patientId').get(function () {
+  return this.patient;
+});
+patientVisitSchema.virtual('name').get(function () {
+  return (this.patient && this.patient.name) ? this.patient.name : this.patientName;
+});
+patientVisitSchema.virtual('phoneNumber').get(function () {
+  return (this.patient && this.patient.mobileNumber) ? this.patient.mobileNumber : this.mobileNumber;
+});
+patientVisitSchema.virtual('phone').get(function () {
+  return (this.patient && this.patient.mobileNumber) ? this.patient.mobileNumber : this.mobileNumber;
+});
+
 export default mongoose.model('PatientVisit', patientVisitSchema);
+

@@ -55,8 +55,9 @@ const createBill = async (req, res, next) => {
         });
       }
 
-      if (!resolvedPatientName) resolvedPatientName = resolvedPatient.name;
-      if (!resolvedPhone) resolvedPhone = resolvedPatient.mobileNumber;
+      // Dynamically fetch patient details and contact numbers from the database record
+      resolvedPatientName = resolvedPatient.name;
+      resolvedPhone = resolvedPatient.mobileNumber;
     } else {
       if (!resolvedPatientName) {
         return res.status(400).json({
@@ -113,6 +114,8 @@ const createBill = async (req, res, next) => {
       instructions: instructions || '',
       followUpDate: followUpDate || ''
     });
+
+    await bill.populate('patient');
 
     res.status(201).json({
       success: true,
@@ -240,6 +243,8 @@ const updateBill = async (req, res, next) => {
       const patientDoc = await Patient.findById(targetPatientId);
       if (patientDoc && isOwnerOrAdmin(req, patientDoc)) {
         updateData.patient = patientDoc._id;
+        updateData.patientName = patientDoc.name;
+        updateData.phoneNumber = patientDoc.mobileNumber;
       }
     }
 

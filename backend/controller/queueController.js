@@ -104,8 +104,9 @@ const issueToken = async (req, res, next) => {
         });
       }
 
-      if (!resolvedName) resolvedName = resolvedPatient.name;
-      if (!resolvedPhone) resolvedPhone = resolvedPatient.mobileNumber;
+      // Dynamically fetch patient details and contact numbers from the database record
+      resolvedName = resolvedPatient.name;
+      resolvedPhone = resolvedPatient.mobileNumber;
     } else {
       if (!resolvedName || !resolvedPhone) {
         return res.status(400).json({
@@ -152,11 +153,14 @@ const issueToken = async (req, res, next) => {
       notes: (notes || '').trim()
     });
 
+    await queueItem.populate('patient');
+
     res.status(201).json({
       success: true,
       message: `Token #${nextTokenNumber} issued successfully`,
       data: queueItem
     });
+
   } catch (error) {
     next(error);
   }

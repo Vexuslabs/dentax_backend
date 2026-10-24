@@ -65,15 +65,18 @@ const appointmentSchema = new mongoose.Schema(
   }
 );
 
-// Virtual aliases for Flutter compatibility
+// Virtual aliases for Flutter compatibility & dynamic patient resolution
+appointmentSchema.virtual('patientId').get(function () {
+  return this.patient;
+});
 appointmentSchema.virtual('name').get(function () {
-  return this.patientName;
+  return (this.patient && this.patient.name) ? this.patient.name : this.patientName;
 });
 appointmentSchema.virtual('mobileNumber').get(function () {
-  return this.phoneNumber;
+  return (this.patient && this.patient.mobileNumber) ? this.patient.mobileNumber : this.phoneNumber;
 });
 appointmentSchema.virtual('phone').get(function () {
-  return this.phoneNumber;
+  return (this.patient && this.patient.mobileNumber) ? this.patient.mobileNumber : this.phoneNumber;
 });
 appointmentSchema.virtual('date').get(function () {
   return this.appointmentDate;
@@ -83,3 +86,4 @@ appointmentSchema.virtual('time').get(function () {
 });
 
 export default mongoose.model('Appointment', appointmentSchema);
+

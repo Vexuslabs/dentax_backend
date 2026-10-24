@@ -62,6 +62,7 @@ const createAppointment = async (req, res, next) => {
 
     let resolvedPatientName = (patientName || name || '').trim();
     let resolvedPhone = (phoneNumber || mobileNumber || phone || '').trim();
+    let resolvedGender = gender;
     const resolvedDate = (appointmentDate || date || '').trim();
     const resolvedTime = (appointmentTime || time || '').trim();
 
@@ -85,9 +86,12 @@ const createAppointment = async (req, res, next) => {
         });
       }
 
-      // Populate missing fields from patient record
-      if (!resolvedPatientName) resolvedPatientName = resolvedPatient.name;
-      if (!resolvedPhone) resolvedPhone = resolvedPatient.mobileNumber;
+      // Dynamically fetch patient details and contact numbers from the database record
+      resolvedPatientName = resolvedPatient.name;
+      resolvedPhone = resolvedPatient.mobileNumber;
+      if (resolvedPatient.gender) {
+        resolvedGender = resolvedPatient.gender === 'Female' ? 'F' : 'M';
+      }
     } else {
       // 2. No patientId provided: find existing patient for this doctor or auto-create
       if (!resolvedPatientName || !resolvedPhone) {
@@ -136,14 +140,18 @@ const createAppointment = async (req, res, next) => {
       appointmentTime: resolvedTime,
       notes: (notes || '').trim(),
       status: normalizeStatus(status),
-      gender: gender || (resolvedPatient.gender === 'Female' ? 'F' : 'M')
+      gender: resolvedGender || (resolvedPatient.gender === 'Female' ? 'F' : 'M')
     });
+
+
+    await appointment.populate('patient');
 
     res.status(201).json({
       success: true,
       message: 'Appointment booked successfully',
       data: appointment
     });
+
   } catch (error) {
     next(error);
   }
@@ -392,12 +400,15 @@ const updateAppointment = async (req, res, next) => {
         });
       }
       appointment.patient = patientDoc._id;
-      if (!patientName && !name) appointment.patientName = patientDoc.name;
-      if (!phoneNumber && !mobileNumber && !phone) appointment.phoneNumber = patientDoc.mobileNumber;
+      // Dynamically fetch patient details and contact number from database record
+      appointment.patientName = patientDoc.name;
+      appointment.phoneNumber = patientDoc.mobileNumber;
+      if (patientDoc.gender) appointment.gender = patientDoc.gender === 'Female' ? 'F' : 'M';
+    } else {
+      if (patientName || name) appointment.patientName = (patientName || name).trim();
+      if (phoneNumber || mobileNumber || phone) appointment.phoneNumber = (phoneNumber || mobileNumber || phone).trim();
     }
 
-    if (patientName || name) appointment.patientName = (patientName || name).trim();
-    if (phoneNumber || mobileNumber || phone) appointment.phoneNumber = (phoneNumber || mobileNumber || phone).trim();
     if (department) appointment.department = department.trim();
     if (doctorName || doctor) appointment.doctorName = (doctorName || doctor).trim();
     if (visitType) appointment.visitType = visitType.trim();

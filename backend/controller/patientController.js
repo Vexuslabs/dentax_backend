@@ -4,6 +4,8 @@ import Appointment from '../model/Appointment.js';
 import Bill from '../model/Bill.js';
 import Prescription from '../model/Prescription.js';
 import DentalChart from '../model/DentalChart.js';
+import Queue from '../model/Queue.js';
+import Lab from '../model/Lab.js';
 import { escapeRegex, isValidObjectId, getDoctorFilter, isOwnerOrAdmin } from '../utils/helpers.js';
 
 // @desc    Create new patient
@@ -209,6 +211,39 @@ const updatePatient = async (req, res, next) => {
       new: true,
       runValidators: true
     });
+
+    // Synchronize updated patient details and contact numbers across all linked database records
+    if (updateData.name || updateData.patientName || updateData.mobileNumber || updateData.phone) {
+      const newName = (updateData.name || updateData.patientName || updatedPatient.name).trim();
+      const newPhone = (updateData.mobileNumber || updateData.phone || updatedPatient.mobileNumber).trim();
+
+      await Promise.all([
+        Appointment.updateMany(
+          { patient: updatedPatient._id },
+          { $set: { patientName: newName, phoneNumber: newPhone } }
+        ),
+        Bill.updateMany(
+          { patient: updatedPatient._id },
+          { $set: { patientName: newName, phoneNumber: newPhone } }
+        ),
+        PatientVisit.updateMany(
+          { patient: updatedPatient._id },
+          { $set: { patientName: newName, mobileNumber: newPhone } }
+        ),
+        Prescription.updateMany(
+          { patient: updatedPatient._id },
+          { $set: { patientName: newName } }
+        ),
+        Queue.updateMany(
+          { patient: updatedPatient._id },
+          { $set: { patientName: newName, phoneNumber: newPhone } }
+        ),
+        Lab.updateMany(
+          { patient: updatedPatient._id },
+          { $set: { patientName: newName } }
+        )
+      ]);
+    }
 
     res.status(200).json({
       success: true,

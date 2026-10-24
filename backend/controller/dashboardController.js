@@ -114,7 +114,8 @@ const getDashboardSummary = async (req, res, next) => {
       Appointment.find({
         ...doctorFilter,
         appointmentDate: todayStr
-      }).sort({ appointmentTime: 1 }),
+      }).populate('patient').sort({ appointmentTime: 1 }),
+
 
       // Revenue aggregate for current doctor for the period
       Bill.aggregate([

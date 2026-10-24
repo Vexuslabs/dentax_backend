@@ -6,6 +6,7 @@ import Prescription from '../model/Prescription.js';
 import DentalChart from '../model/DentalChart.js';
 import Queue from '../model/Queue.js';
 import Lab from '../model/Lab.js';
+import TreatmentPlan from '../model/TreatmentPlan.js';
 import { escapeRegex, isValidObjectId, getDoctorFilter, isOwnerOrAdmin } from '../utils/helpers.js';
 
 // @desc    Create new patient
@@ -147,7 +148,7 @@ const getPatientById = async (req, res, next) => {
     const doctorScope = getDoctorFilter(req);
 
     // Fetch related clinical records linked by patient ID and doctor scope
-    const [visits, appointments, bills, prescriptions, dentalChart] = await Promise.all([
+    const [visits, appointments, bills, prescriptions, treatmentPlans, dentalChart] = await Promise.all([
       PatientVisit.find({
         ...doctorScope,
         $or: [{ patient: patient._id }, { patientName: patient.name }]
@@ -164,6 +165,10 @@ const getPatientById = async (req, res, next) => {
         ...doctorScope,
         $or: [{ patient: patient._id }, { patientName: patient.name }]
       }).sort({ createdAt: -1 }),
+      TreatmentPlan.find({
+        ...doctorScope,
+        $or: [{ patient: patient._id }, { patientName: patient.name }]
+      }).sort({ createdAt: -1 }),
       DentalChart.findOne({ patient: patient._id })
     ]);
 
@@ -175,6 +180,7 @@ const getPatientById = async (req, res, next) => {
         appointments,
         bills,
         prescriptions,
+        treatmentPlans,
         dentalChart: dentalChart ? dentalChart.teeth : {}
       }
     });
@@ -241,6 +247,10 @@ const updatePatient = async (req, res, next) => {
         Lab.updateMany(
           { patient: updatedPatient._id },
           { $set: { patientName: newName } }
+        ),
+        TreatmentPlan.updateMany(
+          { patient: updatedPatient._id },
+          { $set: { patientName: newName, phoneNumber: newPhone } }
         )
       ]);
     }

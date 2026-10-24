@@ -38,6 +38,7 @@ import subscriptionRoutes from './Route/subscriptionRoutes.js';
 import notificationRoutes from './Route/notificationRoutes.js';
 import uploadRoutes from './Route/uploadRoutes.js';
 import queueRoutes from './Route/queueRoutes.js';
+import treatmentPlanRoutes from './Route/treatmentPlanRoutes.js';
 
 // Initialize Express app
 const app = express();
@@ -141,6 +142,8 @@ app.use('/api/subscriptions', subscriptionRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/queue', queueRoutes);
+app.use('/api/treatment-plans', treatmentPlanRoutes);
+app.use('/api/treatment-plan', treatmentPlanRoutes);
 
 // Error Handling Middlewares
 app.use(notFound);

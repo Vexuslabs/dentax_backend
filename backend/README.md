@@ -15,9 +15,6 @@ Enterprise-grade, clean, and maintainable Node.js & Express REST API backend for
   - `model/` - Mongoose data schemas and business models
   - `controller/` - Request handling and business logic
   - `Route/` - RESTful route declarations
-  - `model/` - Mongoose data schemas and business models
-  - `controller/` - Request handling and business logic
-  - `Route/` - RESTful route declarations
   - `middleware/` - JWT protection, file uploads, 404 & centralized error handling
 
 ---

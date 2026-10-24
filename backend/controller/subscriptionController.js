@@ -82,7 +82,7 @@ const getPlans = async (req, res, next) => {
   try {
     let plans = await SubscriptionPlan.find();
 
-    // If database is empty, seed defaults
+    // If database has no plans configured, initialize default tier plans
     if (!plans || plans.length === 0) {
       plans = await SubscriptionPlan.insertMany(defaultPlans);
     }
@@ -124,8 +124,8 @@ const createSubscriptionOrder = async (req, res, next) => {
     if (!plan) {
       plan = await SubscriptionPlan.findOne({ planId: 'razor_monthly' });
       if (!plan) {
-        const seeded = await SubscriptionPlan.insertMany(defaultPlans);
-        plan = seeded[0];
+        const defaultTierPlans = await SubscriptionPlan.insertMany(defaultPlans);
+        plan = defaultTierPlans[0];
       }
     }
 

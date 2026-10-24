@@ -4,7 +4,9 @@ import {
   getAllPatients,
   getPatientById,
   updatePatient,
-  deletePatient
+  deletePatient,
+  getDentalChart,
+  updateDentalChart
 } from '../controller/patientController.js';
 import { optionalAuth } from '../middleware/auth.js';
 
@@ -15,6 +17,10 @@ router.use(optionalAuth);
 router.route('/')
   .post(createPatient)
   .get(getAllPatients);
+
+router.route('/:id/dental-chart')
+  .get(getDentalChart)
+  .put(updateDentalChart);
 
 router.route('/:id')
   .get(getPatientById)

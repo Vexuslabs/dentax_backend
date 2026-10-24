@@ -71,6 +71,12 @@ const campaignSchema = new mongoose.Schema(
     scheduleDate: {
       type: Date,
       default: null
+    },
+    deliveryStats: {
+      totalRecipients: { type: Number, default: 0 },
+      sentCount: { type: Number, default: 0 },
+      failedCount: { type: Number, default: 0 },
+      provider: { type: String, default: 'none' }
     }
   },
   {

@@ -1,4 +1,6 @@
 import Campaign from '../model/Campaign.js';
+import Patient from '../model/Patient.js';
+import messagingService from '../utils/messagingService.js';
 import { isValidObjectId } from '../utils/helpers.js';
 
 // @desc    Create new campaign
@@ -36,6 +38,8 @@ const createCampaign = async (req, res, next) => {
       logoPath = `/uploads/${req.file.filename}`;
     }
 
+    const resolvedStatus = status || 'Sent';
+
     const campaign = await Campaign.create({
       user: req.user ? req.user.id : null,
       campaignType: campaignType || 'SMS',
@@ -51,9 +55,38 @@ const createCampaign = async (req, res, next) => {
       includePhone: includePhone !== undefined ? includePhone : true,
       includeClinicName: includeClinicName !== undefined ? includeClinicName : true,
       logo: logoPath,
-      status: status || 'Sent',
+      status: resolvedStatus,
       scheduleDate: scheduleDate ? new Date(scheduleDate) : null
     });
+
+    // If campaign is marked as Sent, trigger live transmission
+    if (resolvedStatus === 'Sent') {
+      const recipientQuery = { mobileNumber: { $exists: true, $ne: '' } };
+      if (sendTo && sendTo !== 'All Patients' && sendTo !== 'All') {
+        recipientQuery.$or = [
+          { 'preferences.group': sendTo },
+          { 'preferences.membership': sendTo },
+          { gender: sendTo }
+        ];
+      }
+
+      const patients = await Patient.find(recipientQuery).select('name mobileNumber');
+
+      let broadcastMessage = campaign.message;
+      if (campaign.includeClinicName && req.user?.clinicName) {
+        broadcastMessage += ` - ${req.user.clinicName}`;
+      }
+
+      const deliveryResult = await messagingService.broadcast({
+        campaignType: campaign.campaignType,
+        recipients: patients,
+        message: broadcastMessage,
+        mediaUrl: campaign.logo
+      });
+
+      campaign.deliveryStats = deliveryResult;
+      await campaign.save();
+    }
 
     res.status(201).json({
       success: true,

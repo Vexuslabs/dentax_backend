@@ -3,6 +3,7 @@ import PatientVisit from '../model/PatientVisit.js';
 import Appointment from '../model/Appointment.js';
 import Bill from '../model/Bill.js';
 import Prescription from '../model/Prescription.js';
+import DentalChart from '../model/DentalChart.js';
 import { escapeRegex, isValidObjectId } from '../utils/helpers.js';
 
 // @desc    Create new patient
@@ -141,11 +142,12 @@ const getPatientById = async (req, res, next) => {
     }
 
     // Fetch related clinical records
-    const [visits, appointments, bills, prescriptions] = await Promise.all([
+    const [visits, appointments, bills, prescriptions, dentalChart] = await Promise.all([
       PatientVisit.find({ $or: [{ patient: patient._id }, { patientName: patient.name }] }).sort({ createdAt: -1 }),
       Appointment.find({ $or: [{ patient: patient._id }, { patientName: patient.name }] }).sort({ appointmentDate: -1 }),
       Bill.find({ $or: [{ patient: patient._id }, { patientName: patient.name }] }).sort({ createdAt: -1 }),
-      Prescription.find({ $or: [{ patient: patient._id }, { patientName: patient.name }] }).sort({ createdAt: -1 })
+      Prescription.find({ $or: [{ patient: patient._id }, { patientName: patient.name }] }).sort({ createdAt: -1 }),
+      DentalChart.findOne({ patient: patient._id })
     ]);
 
     res.status(200).json({
@@ -155,7 +157,8 @@ const getPatientById = async (req, res, next) => {
         visits,
         appointments,
         bills,
-        prescriptions
+        prescriptions,
+        dentalChart: dentalChart ? dentalChart.teeth : {}
       }
     });
   } catch (error) {
@@ -230,12 +233,113 @@ const deletePatient = async (req, res, next) => {
   }
 };
 
+// @desc    Get patient dental chart (odontogram)
+// @route   GET /api/patients/:id/dental-chart
+// @access  Public / Protected
+const getDentalChart = async (req, res, next) => {
+  try {
+    if (!isValidObjectId(req.params.id)) {
+      return res.status(404).json({
+        success: false,
+        message: 'Patient not found'
+      });
+    }
+
+    const patient = await Patient.findById(req.params.id);
+    if (!patient) {
+      return res.status(404).json({
+        success: false,
+        message: 'Patient not found'
+      });
+    }
+
+    let chart = await DentalChart.findOne({ patient: patient._id });
+    if (!chart) {
+      chart = {
+        patient: patient._id,
+        teeth: {}
+      };
+    }
+
+    res.status(200).json({
+      success: true,
+      data: chart
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Update patient dental chart (odontogram)
+// @route   PUT /api/patients/:id/dental-chart
+// @access  Public / Protected
+const updateDentalChart = async (req, res, next) => {
+  try {
+    if (!isValidObjectId(req.params.id)) {
+      return res.status(404).json({
+        success: false,
+        message: 'Patient not found'
+      });
+    }
+
+    const patient = await Patient.findById(req.params.id);
+    if (!patient) {
+      return res.status(404).json({
+        success: false,
+        message: 'Patient not found'
+      });
+    }
+
+    const teethUpdates = req.body.teeth !== undefined ? req.body.teeth : req.body;
+
+    let chart = await DentalChart.findOne({ patient: patient._id });
+
+    if (!chart) {
+      chart = new DentalChart({
+        patient: patient._id,
+        user: req.user ? req.user.id : null,
+        teeth: new Map()
+      });
+    }
+
+    if (teethUpdates && typeof teethUpdates === 'object') {
+      for (const [toothKey, val] of Object.entries(teethUpdates)) {
+        if (toothKey === 'user' || toothKey === 'patient' || toothKey === '_id') continue;
+        const existing = chart.teeth.get(toothKey);
+        const existingObj = existing ? (typeof existing.toObject === 'function' ? existing.toObject() : existing) : {};
+        const incomingObj = typeof val === 'object' && val !== null ? val : { condition: String(val) };
+        chart.teeth.set(toothKey, {
+          ...existingObj,
+          ...incomingObj,
+          updatedAt: new Date()
+        });
+      }
+    }
+
+    if (req.user) {
+      chart.user = req.user.id;
+    }
+
+    await chart.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Dental chart updated successfully',
+      data: chart
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 export {
   createPatient,
   getAllPatients,
   getPatientById,
   updatePatient,
-  deletePatient
+  deletePatient,
+  getDentalChart,
+  updateDentalChart
 };
 
 export default {
@@ -243,5 +347,8 @@ export default {
   getAllPatients,
   getPatientById,
   updatePatient,
-  deletePatient
+  deletePatient,
+  getDentalChart,
+  updateDentalChart
 };
+

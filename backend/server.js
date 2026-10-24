@@ -35,6 +35,9 @@ import labRoutes from './Route/labRoutes.js';
 import reportRoutes from './Route/reportRoutes.js';
 import dashboardRoutes from './Route/dashboardRoutes.js';
 import subscriptionRoutes from './Route/subscriptionRoutes.js';
+import notificationRoutes from './Route/notificationRoutes.js';
+import uploadRoutes from './Route/uploadRoutes.js';
+import queueRoutes from './Route/queueRoutes.js';
 
 // Initialize Express app
 const app = express();
@@ -135,6 +138,9 @@ app.use('/api/lab', labRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/subscriptions', subscriptionRoutes);
+app.use('/api/notifications', notificationRoutes);
+app.use('/api/upload', uploadRoutes);
+app.use('/api/queue', queueRoutes);
 
 // Error Handling Middlewares
 app.use(notFound);

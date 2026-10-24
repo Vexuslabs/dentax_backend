@@ -128,6 +128,10 @@ const updateProfile = async (req, res, next) => {
       doctorType,
       occupation,
       licenseNo,
+      avatar,
+      clinicAddress,
+      qualification,
+      specialization,
       template
     } = req.body;
 
@@ -139,13 +143,25 @@ const updateProfile = async (req, res, next) => {
     if (doctorType) fieldsToUpdate.doctorType = doctorType;
     if (occupation) fieldsToUpdate.occupation = occupation;
     if (licenseNo !== undefined) fieldsToUpdate.licenseNo = licenseNo;
+    if (avatar !== undefined) fieldsToUpdate.avatar = avatar;
+    if (clinicAddress !== undefined) fieldsToUpdate.clinicAddress = clinicAddress.trim();
+    if (qualification !== undefined) fieldsToUpdate.qualification = qualification.trim();
+    if (specialization !== undefined) fieldsToUpdate.specialization = specialization.trim();
 
     // Handle template configuration (for prescription/bills)
     if (template) {
-      fieldsToUpdate.template = {
-        ...(req.user.template ? req.user.template.toObject() : {}),
-        ...template
-      };
+      let parsedTemplate = template;
+      if (typeof template === 'string') {
+        try {
+          parsedTemplate = JSON.parse(template);
+        } catch (_) {}
+      }
+      if (typeof parsedTemplate === 'object' && parsedTemplate !== null) {
+        fieldsToUpdate.template = {
+          ...(req.user.template ? req.user.template.toObject() : {}),
+          ...parsedTemplate
+        };
+      }
     }
 
     // Handle uploaded file paths if provided by Multer
@@ -158,6 +174,9 @@ const updateProfile = async (req, res, next) => {
       }
       if (req.files.signature && req.files.signature[0]) {
         fieldsToUpdate.template.signature = `/uploads/${req.files.signature[0].filename}`;
+      }
+      if (req.files.avatar && req.files.avatar[0]) {
+        fieldsToUpdate.avatar = `/uploads/${req.files.avatar[0].filename}`;
       }
     }
 

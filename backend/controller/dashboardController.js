@@ -64,8 +64,8 @@ const getDateRangeBounds = (rangeLabel, customStart, customEnd) => {
 // @access  Public / Protected
 const getDashboardSummary = async (req, res, next) => {
   try {
-    const { range, startDate, endDate } = req.query;
-    const rangeLabel = range || 'Last 30 Days';
+    const { range, filter, startDate, endDate } = req.query;
+    const rangeLabel = range || filter || 'Last 30 Days';
 
     const { start, end } = getDateRangeBounds(rangeLabel, startDate, endDate);
     const todayStr = new Date().toISOString().split('T')[0];

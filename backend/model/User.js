@@ -64,6 +64,25 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: ''
     },
+    avatar: {
+      type: String,
+      default: ''
+    },
+    clinicAddress: {
+      type: String,
+      default: '',
+      trim: true
+    },
+    qualification: {
+      type: String,
+      default: '',
+      trim: true
+    },
+    specialization: {
+      type: String,
+      default: '',
+      trim: true
+    },
     template: {
       header: { type: String, default: '' },
       footer: { type: String, default: '' },

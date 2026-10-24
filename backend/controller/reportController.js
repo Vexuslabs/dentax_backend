@@ -57,11 +57,14 @@ const saveReport = async (req, res, next) => {
 };
 
 // @desc    Generate dynamic report on-the-fly
-// @route   GET /api/reports/generate
+// @route   GET & POST /api/reports/generate
 // @access  Public / Protected
 const generateReport = async (req, res, next) => {
   try {
-    const { title, type, fromDate, toDate } = req.query;
+    const title = req.body?.title || req.query?.title || '';
+    const type = req.body?.type || req.query?.type || '';
+    const fromDate = req.body?.fromDate || req.query?.fromDate;
+    const toDate = req.body?.toDate || req.query?.toDate;
 
     const reportTitle = (title || type || 'Payment Summary Report').trim();
     const from = fromDate ? new Date(fromDate) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);

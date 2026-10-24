@@ -39,7 +39,8 @@ router.put(
   protect,
   upload.fields([
     { name: 'logo', maxCount: 1 },
-    { name: 'signature', maxCount: 1 }
+    { name: 'signature', maxCount: 1 },
+    { name: 'avatar', maxCount: 1 }
   ]),
   updateProfile
 );

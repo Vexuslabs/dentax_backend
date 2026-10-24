@@ -14,6 +14,7 @@ router.use(optionalAuth);
 router.get('/saved', getAllSavedReports);
 router.post('/save', saveReport);
 router.get('/generate', generateReport);
+router.post('/generate', generateReport);
 router.get('/patient-dossier/:patientId', getPatientDossier);
 
 export default router;

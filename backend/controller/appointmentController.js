@@ -2,6 +2,21 @@ import Appointment from '../model/Appointment.js';
 import Patient from '../model/Patient.js';
 import { escapeRegex, isValidObjectId } from '../utils/helpers.js';
 
+// Helper to normalize status across Flutter client variants
+const normalizeStatus = (status) => {
+  if (!status || typeof status !== 'string') return 'Scheduled';
+  const s = status.trim().toLowerCase();
+  if (s === 'booked' || s === 'pending') return 'Scheduled';
+  if (s === 'scheduled') return 'Scheduled';
+  if (s === 'confirmed') return 'Confirmed';
+  if (s === 'checked in' || s === 'checkedin') return 'Checked In';
+  if (s === 'engaged') return 'Engaged';
+  if (s === 'completed') return 'Completed';
+  if (s === 'missed') return 'Missed';
+  if (s === 'cancelled' || s === 'canceled') return 'Cancelled';
+  return status.trim();
+};
+
 // Helper to auto-update past scheduled appointments to Missed
 const autoCheckMissed = async () => {
   try {
@@ -85,7 +100,7 @@ const createAppointment = async (req, res, next) => {
       appointmentDate: resolvedDate,
       appointmentTime: resolvedTime,
       notes: (notes || '').trim(),
-      status: status || 'Scheduled',
+      status: normalizeStatus(status),
       gender: gender || 'M'
     });
 
@@ -212,9 +227,11 @@ const updateAppointmentStatus = async (req, res, next) => {
       });
     }
 
+    const normalizedStatus = normalizeStatus(status);
+
     const appointment = await Appointment.findByIdAndUpdate(
       req.params.id,
-      { status },
+      { status: normalizedStatus },
       { new: true, runValidators: true }
     );
 

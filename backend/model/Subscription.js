@@ -84,6 +84,14 @@ const userSubscriptionSchema = new mongoose.Schema(
     razorpayPaymentId: {
       type: String,
       default: ''
+    },
+    razorpayOrderId: {
+      type: String,
+      default: ''
+    },
+    razorpaySignature: {
+      type: String,
+      default: ''
     }
   },
   {

@@ -17,10 +17,70 @@ const normalizeStatus = (status) => {
   return status.trim();
 };
 
+// Helper to parse any incoming date format (YYYY-MM-DD, ISO, DD-MM-YYYY, timestamps, Date objects)
+// into a strict, canonical YYYY-MM-DD format preserving the intended calendar date.
+const parseDateToCanonical = (inputDate) => {
+  if (!inputDate) return '';
+  if (inputDate instanceof Date) {
+    if (isNaN(inputDate.getTime())) return '';
+    const y = inputDate.getFullYear();
+    const m = String(inputDate.getMonth() + 1).padStart(2, '0');
+    const d = String(inputDate.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  const str = String(inputDate).trim();
+  if (!str) return '';
+
+  // 1. Matches YYYY-MM-DD or YYYY/MM/DD (e.g. 2026-11-20 or 2026-11-20T...)
+  const ymdMatch = str.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  if (ymdMatch) {
+    const y = ymdMatch[1];
+    const m = String(ymdMatch[2]).padStart(2, '0');
+    const d = String(ymdMatch[3]).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  // 2. Matches DD-MM-YYYY or DD/MM/YYYY
+  const dmyMatch = str.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})/);
+  if (dmyMatch) {
+    let day = Number(dmyMatch[1]);
+    let month = Number(dmyMatch[2]);
+    const year = dmyMatch[3];
+    if (month > 12 && day <= 12) {
+      const temp = day;
+      day = month;
+      month = temp;
+    }
+    return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  }
+
+  // 3. Fallback to Date parsing
+  const parsed = new Date(str);
+  if (!isNaN(parsed.getTime())) {
+    const y = parsed.getFullYear();
+    const m = String(parsed.getMonth() + 1).padStart(2, '0');
+    const d = String(parsed.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  return str;
+};
+
+// Helper to normalize gender dynamically
+const normalizeGender = (val) => {
+  if (!val) return '';
+  const s = String(val).trim().toLowerCase();
+  if (s === 'f' || s === 'female') return 'Female';
+  if (s === 'm' || s === 'male') return 'Male';
+  if (s === 'other' || s === 'o') return 'Other';
+  return val;
+};
+
 // Helper to auto-update past scheduled appointments to Missed scoped to doctor
 const autoCheckMissed = async (userId) => {
   try {
-    const todayStr = new Date().toISOString().split('T')[0];
+    const today = new Date();
+    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
     const query = {
       appointmentDate: { $lt: todayStr },
       status: { $in: ['Scheduled', 'Confirmed', 'Booked', 'Pending'] }
@@ -60,16 +120,21 @@ const createAppointment = async (req, res, next) => {
       gender
     } = req.body;
 
-    let resolvedPatientName = (patientName || name || '').trim();
-    let resolvedPhone = (phoneNumber || mobileNumber || phone || '').trim();
-    let resolvedGender = gender;
-    const resolvedDate = (appointmentDate || date || '').trim();
-    const resolvedTime = (appointmentTime || time || '').trim();
+    const inputPatientName = (patientName || name || '').trim();
+    const inputPhone = (phoneNumber || mobileNumber || phone || '').trim();
+    
+    // Dynamically resolve gender from request without hardcoding
+    let resolvedGender = normalizeGender(gender || req.body.sex);
 
-    const targetPatientId = patientId || patientInputId;
+    // Dynamically parse and normalize date preserving next month/future dates
+    const rawDateInput = appointmentDate || req.body.appointment_date || date || req.body.selectedDate || req.body.bookingDate || req.body.scheduledDate || req.body.dateTime || req.body.datetime;
+    const resolvedDate = parseDateToCanonical(rawDateInput);
+    const resolvedTime = (appointmentTime || req.body.appointment_time || time || '10:00 AM').trim();
+
+    const targetPatientId = patientId || patientInputId || req.body?.patient_id;
+    const doctorQuery = getDoctorFilter(req);
     let resolvedPatient = null;
 
-    // 1. If patientId is provided, find patient by ID scoped to current doctor
     if (targetPatientId) {
       if (!isValidObjectId(targetPatientId)) {
         return res.status(400).json({
@@ -86,53 +151,87 @@ const createAppointment = async (req, res, next) => {
         });
       }
 
-      // Dynamically fetch patient details and contact numbers from the database record
-      resolvedPatientName = resolvedPatient.name;
-      resolvedPhone = resolvedPatient.mobileNumber;
-      if (resolvedPatient.gender) {
-        resolvedGender = resolvedPatient.gender === 'Female' ? 'F' : 'M';
+      // If client provided a different patientName, avoid hijacking into target patient
+      if (inputPatientName && inputPatientName.toLowerCase() !== resolvedPatient.name.toLowerCase()) {
+        const nameMatch = await Patient.findOne({
+          ...doctorQuery,
+          name: new RegExp(`^${escapeRegex(inputPatientName)}$`, 'i')
+        });
+
+        if (nameMatch) {
+          resolvedPatient = nameMatch;
+        } else {
+          const dynamicDob = req.body.dob ? parseDateToCanonical(req.body.dob) : (req.body.age ? `${new Date().getFullYear() - Number(req.body.age)}-01-01` : '');
+          resolvedPatient = await Patient.create({
+            user: req.user ? req.user.id : null,
+            name: inputPatientName,
+            mobileNumber: inputPhone || resolvedPatient.mobileNumber || '0000000000',
+            dob: dynamicDob || '1995-01-01',
+            gender: resolvedGender || 'Other',
+            age: Number(req.body.age) || 0
+          });
+        }
       }
     } else {
-      // 2. No patientId provided: find existing patient for this doctor or auto-create
-      if (!resolvedPatientName || !resolvedPhone) {
+      if (!inputPatientName && !inputPhone) {
         return res.status(400).json({
           success: false,
           message: 'Patient name and phone number (or a valid patientId) are required.'
         });
       }
 
-      const doctorQuery = getDoctorFilter(req);
-      resolvedPatient = await Patient.findOne({
-        ...doctorQuery,
-        $or: [
-          { name: resolvedPatientName },
-          { mobileNumber: resolvedPhone }
-        ]
-      });
+      if (inputPatientName && inputPhone) {
+        resolvedPatient = await Patient.findOne({
+          ...doctorQuery,
+          name: new RegExp(`^${escapeRegex(inputPatientName)}$`, 'i'),
+          mobileNumber: inputPhone
+        });
+      }
+
+      if (!resolvedPatient && inputPatientName) {
+        resolvedPatient = await Patient.findOne({
+          ...doctorQuery,
+          name: new RegExp(`^${escapeRegex(inputPatientName)}$`, 'i')
+        });
+      }
 
       if (!resolvedPatient) {
+        if (!inputPatientName) {
+          return res.status(400).json({
+            success: false,
+            message: 'Patient name is required.'
+          });
+        }
+        const dynamicDob = req.body.dob ? parseDateToCanonical(req.body.dob) : (req.body.age ? `${new Date().getFullYear() - Number(req.body.age)}-01-01` : '');
         resolvedPatient = await Patient.create({
           user: req.user ? req.user.id : null,
-          name: resolvedPatientName,
-          mobileNumber: resolvedPhone,
-          dob: '2000-01-01',
-          gender: gender || 'Male'
+          name: inputPatientName,
+          mobileNumber: inputPhone || '0000000000',
+          dob: dynamicDob || '1995-01-01',
+          gender: resolvedGender || 'Other',
+          age: Number(req.body.age) || 0
         });
       }
     }
 
-    if (!resolvedDate || !resolvedTime) {
+    const finalPatientName = resolvedPatient.name;
+    const finalPhone = resolvedPatient.mobileNumber || inputPhone;
+    if (!resolvedGender && resolvedPatient.gender) {
+      resolvedGender = normalizeGender(resolvedPatient.gender);
+    }
+
+    if (!resolvedDate) {
       return res.status(400).json({
         success: false,
-        message: 'Appointment date and time slot are required.'
+        message: 'Appointment date is required.'
       });
     }
 
     const appointment = await Appointment.create({
       user: req.user ? req.user.id : null,
       patient: resolvedPatient._id,
-      patientName: resolvedPatientName,
-      phoneNumber: resolvedPhone,
+      patientName: finalPatientName,
+      phoneNumber: finalPhone,
       department: department || 'Dental',
       doctorName: (doctorName || doctor || req.user?.name || 'Dr. Self').trim(),
       visitType: visitType || 'Consultation',
@@ -140,9 +239,8 @@ const createAppointment = async (req, res, next) => {
       appointmentTime: resolvedTime,
       notes: (notes || '').trim(),
       status: normalizeStatus(status),
-      gender: resolvedGender || (resolvedPatient.gender === 'Female' ? 'F' : 'M')
+      gender: resolvedGender || normalizeGender(resolvedPatient.gender) || 'Other'
     });
-
 
     await appointment.populate('patient');
 
@@ -165,19 +263,43 @@ const getAllAppointments = async (req, res, next) => {
     const userId = req.user?.id;
     await autoCheckMissed(userId);
 
-    const { date, status, department, doctorName, patientId, q } = req.query;
+    const today = new Date();
+    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+
+    const { date, status, department, doctorName, q, startDate, endDate, month, type, filter: filterParam } = req.query;
+    const rawPatientId = req.query.patientId || req.query.patient || req.query.patient_id;
 
     const filter = getDoctorFilter(req);
 
-    if (patientId && isValidObjectId(patientId)) {
-      filter.patient = patientId;
+    if (rawPatientId && isValidObjectId(rawPatientId)) {
+      filter.patient = rawPatientId;
     }
 
-    if (date) {
-      filter.appointmentDate = date;
+    const isUpcoming = req.query.upcoming === 'true' ||
+      type === 'upcoming' ||
+      filterParam === 'upcoming' ||
+      status?.toLowerCase() === 'upcoming' ||
+      date?.toLowerCase() === 'upcoming' ||
+      req.query.tab?.toLowerCase() === 'upcoming';
+
+    if (isUpcoming) {
+      filter.appointmentDate = { $gte: todayStr };
+      filter.status = { $nin: ['Cancelled', 'Missed'] };
+    } else if (date) {
+      filter.appointmentDate = parseDateToCanonical(date);
+    } else if (startDate || endDate || req.query.from || req.query.to) {
+      const fromStr = parseDateToCanonical(startDate || req.query.from);
+      const toStr = parseDateToCanonical(endDate || req.query.to);
+      filter.appointmentDate = {};
+      if (fromStr) filter.appointmentDate.$gte = fromStr;
+      if (toStr) filter.appointmentDate.$lte = toStr;
+    } else if (month) {
+      const m = String(month).trim();
+      const regex = m.includes('-') ? new RegExp(`^${escapeRegex(m)}`) : new RegExp(`^\\d{4}-${escapeRegex(m.padStart(2, '0'))}`);
+      filter.appointmentDate = regex;
     }
 
-    if (status && typeof status === 'string' && status.trim() && status !== 'All') {
+    if (status && typeof status === 'string' && status.trim() && status !== 'All' && status.toLowerCase() !== 'upcoming') {
       filter.status = new RegExp(`^${escapeRegex(status.trim())}$`, 'i');
     }
 
@@ -215,12 +337,55 @@ const getAllAppointments = async (req, res, next) => {
   }
 };
 
+// @desc    Get upcoming appointments (today and all future dates, including next month)
+// @route   GET /api/appointments/upcoming
+// @access  Protected
+const getUpcomingAppointments = async (req, res, next) => {
+  try {
+    const userId = req.user?.id;
+    await autoCheckMissed(userId);
+
+    const today = new Date();
+    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    const rawPatientId = req.query.patientId || req.query.patient || req.query.patient_id;
+
+    const filter = {
+      ...getDoctorFilter(req),
+      appointmentDate: { $gte: todayStr }
+    };
+
+    if (rawPatientId && isValidObjectId(rawPatientId)) {
+      filter.patient = rawPatientId;
+    }
+
+    if (req.query.status && req.query.status !== 'All' && req.query.status.toLowerCase() !== 'upcoming') {
+      filter.status = new RegExp(`^${escapeRegex(req.query.status.trim())}$`, 'i');
+    } else {
+      filter.status = { $nin: ['Cancelled', 'Missed'] };
+    }
+
+    const appointments = await Appointment.find(filter)
+      .populate('patient')
+      .sort({ appointmentDate: 1, appointmentTime: 1 });
+
+    res.status(200).json({
+      success: true,
+      count: appointments.length,
+      today: todayStr,
+      data: appointments
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // @desc    Get today's appointments for current doctor
 // @route   GET /api/appointments/today
 // @access  Protected
 const getTodaysAppointments = async (req, res, next) => {
   try {
-    const todayStr = new Date().toISOString().split('T')[0];
+    const today = new Date();
+    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
     const filter = {
       ...getDoctorFilter(req),
       appointmentDate: todayStr
@@ -466,6 +631,7 @@ const deleteAppointment = async (req, res, next) => {
 export {
   createAppointment,
   getAllAppointments,
+  getUpcomingAppointments,
   getTodaysAppointments,
   getMissedAppointments,
   updateAppointment,
@@ -477,6 +643,7 @@ export {
 export default {
   createAppointment,
   getAllAppointments,
+  getUpcomingAppointments,
   getTodaysAppointments,
   getMissedAppointments,
   updateAppointment,

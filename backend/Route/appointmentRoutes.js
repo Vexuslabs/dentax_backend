@@ -3,6 +3,7 @@ import {
   createAppointment,
   getAllAppointments,
   getTodaysAppointments,
+  getUpcomingAppointments,
   getMissedAppointments,
   updateAppointment,
   updateAppointmentStatus,
@@ -18,6 +19,7 @@ router.use(protect);
 
 // Specialized endpoints
 router.get('/today', getTodaysAppointments);
+router.get('/upcoming', getUpcomingAppointments);
 router.get('/missed', getMissedAppointments);
 router.patch('/:id/status', updateAppointmentStatus);
 

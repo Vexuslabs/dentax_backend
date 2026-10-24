@@ -72,12 +72,19 @@ const createVisit = async (req, res, next) => {
       });
 
       if (!resolvedPatient) {
+        const incomingGender = req.body.gender ? String(req.body.gender).trim().toLowerCase() : '';
+        const resolvedGender = incomingGender === 'female' || incomingGender === 'f' ? 'Female'
+          : incomingGender === 'male' || incomingGender === 'm' ? 'Male'
+          : 'Other';
+        const resolvedDob = req.body.dob ? String(req.body.dob).trim() : (req.body.age && Number(req.body.age) > 0 ? `${new Date().getFullYear() - Number(req.body.age)}-01-01` : '');
+
         resolvedPatient = await Patient.create({
           user: req.user ? req.user.id : null,
           name: resolvedPatientName,
           mobileNumber: resolvedMobile || '0000000000',
-          dob: '2000-01-01',
-          gender: 'Male'
+          dob: resolvedDob,
+          gender: resolvedGender,
+          age: Number(req.body.age) || 0
         });
       }
     }

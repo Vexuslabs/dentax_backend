@@ -155,18 +155,20 @@ const getDashboardSummary = async (req, res, next) => {
 // @access  Protected
 const searchPatients = async (req, res, next) => {
   try {
-    const { q } = req.query;
+    const { q, query, search, name } = req.query;
+    const searchTerm = (q || query || search || name || '').trim();
+    const doctorFilter = getDoctorFilter(req);
 
-    if (!q || typeof q !== 'string' || !q.trim()) {
+    if (!searchTerm) {
+      const recentPatients = await Patient.find(doctorFilter).sort({ createdAt: -1 }).limit(15);
       return res.status(200).json({
         success: true,
-        count: 0,
-        data: []
+        count: recentPatients.length,
+        data: recentPatients
       });
     }
 
-    const regex = new RegExp(escapeRegex(q.trim()), 'i');
-    const doctorFilter = getDoctorFilter(req);
+    const regex = new RegExp(escapeRegex(searchTerm), 'i');
 
     const patients = await Patient.find({
       ...doctorFilter,
@@ -175,7 +177,7 @@ const searchPatients = async (req, res, next) => {
         { mobileNumber: regex },
         { 'personalInfo.adharNumber': regex }
       ]
-    }).limit(15);
+    }).limit(20);
 
     res.status(200).json({
       success: true,

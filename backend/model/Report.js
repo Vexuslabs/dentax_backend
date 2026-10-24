@@ -13,7 +13,7 @@ const reportSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ['Payment', 'Treatment', 'Doctor', 'Patient', 'Dossier', 'Financial', 'General'],
+      enum: ['Payment', 'Treatment', 'Doctor', 'Patient', 'Dossier', 'Financial', 'Prescription', 'Medicine', 'General'],
       default: 'General'
     },
     fromDate: {

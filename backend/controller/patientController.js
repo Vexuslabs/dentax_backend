@@ -37,13 +37,31 @@ const createPatient = async (req, res, next) => {
       });
     }
 
+    // Normalize gender dynamically from input, defaulting to 'Other' if not specified
+    let resolvedGender = 'Other';
+    if (gender) {
+      const g = String(gender).trim().toLowerCase();
+      if (g === 'male' || g === 'm') resolvedGender = 'Male';
+      else if (g === 'female' || g === 'f') resolvedGender = 'Female';
+      else resolvedGender = 'Other';
+    }
+
+    // Dynamic DOB handling - avoid hardcoded dates like 2000-01-01
+    let resolvedDob = '';
+    if (dob) {
+      resolvedDob = String(dob).trim();
+    } else if (age && Number(age) > 0) {
+      const approxYear = new Date().getFullYear() - Number(age);
+      resolvedDob = `${approxYear}-01-01`;
+    }
+
     const patient = await Patient.create({
       user: req.user ? req.user.id : null,
       name: resolvedName,
       mobileNumber: resolvedPhone,
-      dob: dob || new Date(2000, 0, 1).toISOString().split('T')[0],
-      gender: gender || 'Male',
-      age: age || 0,
+      dob: resolvedDob,
+      gender: resolvedGender,
+      age: Number(age) || 0,
       personalInfo: personalInfo || {},
       medicalDetails: medicalDetails || { conditions: [] },
       preferences: preferences || { language: 'English', membership: 'Silver', group: 'Regular' }
@@ -64,7 +82,8 @@ const createPatient = async (req, res, next) => {
 // @access  Protected
 const getAllPatients = async (req, res, next) => {
   try {
-    const { q, gender, startDate, endDate, sort, order } = req.query;
+    const { q, query, search, name, patientName, gender, startDate, endDate, sort, order } = req.query;
+    const searchStr = (q || query || search || name || patientName || '').trim();
 
     const andConditions = [];
 
@@ -73,8 +92,8 @@ const getAllPatients = async (req, res, next) => {
     andConditions.push(doctorQuery);
 
     // Search query for name, mobile number, adhar
-    if (q && typeof q === 'string' && q.trim()) {
-      const searchRegex = new RegExp(escapeRegex(q.trim()), 'i');
+    if (searchStr) {
+      const searchRegex = new RegExp(escapeRegex(searchStr), 'i');
       andConditions.push({
         $or: [
           { name: searchRegex },
@@ -180,6 +199,13 @@ const getPatientById = async (req, res, next) => {
         appointments,
         bills,
         prescriptions,
+        medicines: prescriptions.flatMap((p) => (p.medicines || []).map((m) => ({
+          ...(m.toObject ? m.toObject() : m),
+          prescriptionId: p._id,
+          prescriptionDate: p.createdAt,
+          diagnosis: p.diagnosis,
+          doctorName: p.doctorName
+        }))),
         treatmentPlans,
         dentalChart: dentalChart ? dentalChart.teeth : {}
       }

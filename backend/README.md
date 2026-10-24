@@ -15,9 +15,10 @@ Enterprise-grade, clean, and maintainable Node.js & Express REST API backend for
   - `model/` - Mongoose data schemas and business models
   - `controller/` - Request handling and business logic
   - `Route/` - RESTful route declarations
+  - `model/` - Mongoose data schemas and business models
+  - `controller/` - Request handling and business logic
+  - `Route/` - RESTful route declarations
   - `middleware/` - JWT protection, file uploads, 404 & centralized error handling
-  - `script/` - Database seeding utility matching the Flutter frontend's mock datasets
-  - `test/` - Automated integration test runner
 
 ---
 
@@ -42,22 +43,7 @@ CLIENT_URL=*
 npm install
 ```
 
-### 4. Seed Initial Clinical Data
-Populates the database with realistic sample patients, visits, appointments, bills, prescriptions, accounts, inventory, and dental lab orders matching the Flutter app:
-```bash
-npm run seed
-```
-> **Default Doctor Credentials:**
-> - Email: `doctor@dentalbox.com`
-> - Password: `password123`
-
-### 5. Run Integration Test Suite
-Executes 30 automated integration tests verifying all 13 modules:
-```bash
-npm test
-```
-
-### 6. Start the Server
+### 4. Start the Server
 - **Development (Live Reload):**
   ```bash
   npm run dev

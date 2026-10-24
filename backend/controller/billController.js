@@ -1,6 +1,14 @@
 import Bill from '../model/Bill.js';
 import Patient from '../model/Patient.js';
 import { escapeRegex, isValidObjectId, getDoctorFilter, isOwnerOrAdmin } from '../utils/helpers.js';
+import {
+  DEFAULT_QUICK_BILL_TREATMENTS,
+  normalizeMedicines,
+  normalizeSelectedTeeth,
+  normalizeTreatments,
+  calculateTotals,
+  resolvePatientForBill
+} from '../service/quickBillService.js';
 
 // @desc    Create new bill (standard or quick bill)
 // @route   POST /api/bills
@@ -342,8 +350,210 @@ const getBillStats = async (req, res, next) => {
   }
 };
 
+// @desc    Create new quick bill based on dental chart, treatments, medicines and calculations
+// @route   POST /api/bills/quick
+// @access  Protected
+const createQuickBill = async (req, res, next) => {
+  try {
+    const {
+      patientId,
+      patient: patientInputId,
+      patientName,
+      name,
+      phoneNumber,
+      phone,
+      gender,
+      age,
+      dob,
+      isPediatric,
+      pediatric,
+      chartType,
+      selectedTeeth,
+      teeth,
+      treatments,
+      medicines,
+      amount,
+      fees,
+      grossFees,
+      discount,
+      tax,
+      paidAmount,
+      totalAmount,
+      status,
+      paymentMethod,
+      notes,
+      instructions,
+      diagnosis,
+      followUpDate,
+      invoiceNumber
+    } = req.body;
+
+    // 1. Resolve Patient dynamically (from DB record or dynamically created for doctor)
+    const {
+      patient: resolvedPatient,
+      patientName: resolvedPatientName,
+      phoneNumber: resolvedPhone
+    } = await resolvePatientForBill(req, {
+      patientId,
+      patientInputId,
+      patientName,
+      name,
+      phoneNumber,
+      phone,
+      gender,
+      age,
+      dob
+    });
+
+    // 2. Normalize Dental Chart & Teeth
+    const resolvedIsPediatric = Boolean(isPediatric || pediatric || chartType === 'pediatric');
+    const resolvedSelectedTeeth = normalizeSelectedTeeth(selectedTeeth || teeth);
+
+    // 3. Normalize Medicines
+    const resolvedMedicines = normalizeMedicines(medicines);
+
+    // 4. Calculate Financials (Gross Fees, Discount, Tax, Net Total, Due)
+    const totals = calculateTotals({
+      treatments,
+      amount,
+      fees,
+      grossFees,
+      discount,
+      tax,
+      paidAmount,
+      status
+    });
+
+    // 5. Create Quick Bill document
+    const bill = await Bill.create({
+      user: req.user ? req.user.id : null,
+      patient: resolvedPatient ? resolvedPatient._id : null,
+      invoiceNumber,
+      patientName: resolvedPatientName,
+      phoneNumber: resolvedPhone,
+      doctorName: req.user?.name || 'Dr. Self',
+      amount: totals.grossFees,
+      discount: totals.discount,
+      tax: totals.tax,
+      totalAmount: totalAmount !== undefined ? Number(totalAmount) : totals.totalAmount,
+      paidAmount: totals.paidAmount,
+      dueAmount: totals.dueAmount,
+      status: totals.status || 'Pending',
+      paymentMethod: paymentMethod || 'Pending',
+      notes: notes || '',
+      instructions: instructions || '',
+      diagnosis: diagnosis || 'Dental Treatment',
+      followUpDate: followUpDate || '',
+      isQuickBill: true,
+      isPediatric: resolvedIsPediatric,
+      selectedTeeth: resolvedSelectedTeeth,
+      treatments: totals.treatments,
+      medicines: resolvedMedicines
+    });
+
+    await bill.populate('patient');
+
+    res.status(201).json({
+      success: true,
+      message: 'Quick bill created successfully',
+      data: bill
+    });
+  } catch (error) {
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({
+        success: false,
+        message: error.message
+      });
+    }
+    next(error);
+  }
+};
+
+// @desc    Get default Quick Bill treatments catalog (Cleaning, Filling, Root Canal, Extraction)
+// @route   GET /api/bills/quick/treatments
+// @access  Protected
+const getQuickBillTreatments = async (req, res, next) => {
+  try {
+    res.status(200).json({
+      success: true,
+      count: DEFAULT_QUICK_BILL_TREATMENTS.length,
+      data: DEFAULT_QUICK_BILL_TREATMENTS
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Preview Quick Bill calculations and breakdown before saving
+// @route   POST /api/bills/quick/preview
+// @access  Protected
+const previewQuickBill = async (req, res, next) => {
+  try {
+    const {
+      treatments,
+      amount,
+      fees,
+      grossFees,
+      discount,
+      tax,
+      paidAmount,
+      status,
+      selectedTeeth,
+      medicines,
+      isPediatric
+    } = req.body;
+
+    const totals = calculateTotals({
+      treatments,
+      amount,
+      fees,
+      grossFees,
+      discount,
+      tax,
+      paidAmount,
+      status
+    });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        isPediatric: Boolean(isPediatric),
+        selectedTeeth: normalizeSelectedTeeth(selectedTeeth),
+        treatments: totals.treatments,
+        medicines: normalizeMedicines(medicines),
+        grossFees: totals.grossFees,
+        discount: totals.discount,
+        tax: totals.tax,
+        totalAmount: totals.totalAmount,
+        paidAmount: totals.paidAmount,
+        dueAmount: totals.dueAmount,
+        status: totals.status,
+        itemCount: totals.treatments.length
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Get all quick bills (isQuickBill: true)
+// @route   GET /api/bills/quick
+// @access  Protected
+const getQuickBills = async (req, res, next) => {
+  try {
+    req.query.isQuickBill = 'true';
+    return getAllBills(req, res, next);
+  } catch (error) {
+    next(error);
+  }
+};
+
 export {
   createBill,
+  createQuickBill,
+  getQuickBillTreatments,
+  previewQuickBill,
+  getQuickBills,
   getAllBills,
   getBillById,
   updateBill,
@@ -353,6 +563,10 @@ export {
 
 export default {
   createBill,
+  createQuickBill,
+  getQuickBillTreatments,
+  previewQuickBill,
+  getQuickBills,
   getAllBills,
   getBillById,
   updateBill,

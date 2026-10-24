@@ -41,9 +41,24 @@ const billSchema = new mongoose.Schema(
       default: 0,
       min: [0, 'Discount cannot be negative']
     },
+    tax: {
+      type: Number,
+      default: 0,
+      min: [0, 'Tax cannot be negative']
+    },
     totalAmount: {
       type: Number,
       default: 0
+    },
+    paidAmount: {
+      type: Number,
+      default: 0,
+      min: [0, 'Paid amount cannot be negative']
+    },
+    dueAmount: {
+      type: Number,
+      default: 0,
+      min: [0, 'Due amount cannot be negative']
     },
     status: {
       type: String,
@@ -70,22 +85,27 @@ const billSchema = new mongoose.Schema(
     },
     selectedTeeth: [
       {
-        type: Number
+        type: mongoose.Schema.Types.Mixed
       }
     ],
     treatments: [
       {
-        name: { type: String },
+        name: { type: String, trim: true },
         price: { type: Number, default: 0 },
-        subtitle: { type: String, default: '' }
+        cost: { type: Number, default: 0 },
+        fees: { type: Number, default: 0 },
+        subtitle: { type: String, default: '', trim: true },
+        description: { type: String, default: '', trim: true },
+        quantity: { type: Number, default: 1 }
       }
     ],
     medicines: [
       {
-        name: { type: String },
+        name: { type: String, trim: true },
         dosage: { type: String, default: '500mg' },
         duration: { type: String, default: '5 days' },
-        timing: { type: String, default: 'After Food' }
+        timing: { type: String, default: 'After Food' },
+        frequency: { type: String, default: '' }
       }
     ],
     diagnosis: {
@@ -121,18 +141,30 @@ billSchema.virtual('mobileNumber').get(function () {
 billSchema.virtual('phone').get(function () {
   return (this.patient && this.patient.mobileNumber) ? this.patient.mobileNumber : this.phoneNumber;
 });
+billSchema.virtual('grossFees').get(function () {
+  return this.amount;
+});
+billSchema.virtual('netAmount').get(function () {
+  return this.totalAmount;
+});
+billSchema.virtual('pediatric').get(function () {
+  return this.isPediatric;
+});
 
-
-// Auto-generate invoice number if missing before save
+// Auto-generate invoice number and sync financials if missing before save
 billSchema.pre('save', async function (next) {
   if (!this.invoiceNumber) {
     const count = await this.constructor.countDocuments();
     const nextNum = (count + 1).toString().padLeft ? (count + 1).toString().padStart(3, '0') : String(count + 1).padStart(3, '0');
     this.invoiceNumber = `#INV-${nextNum}`;
   }
-  if (!this.totalAmount) {
-    const net = (this.amount || 0) - (this.discount || 0);
+  if (this.totalAmount == null || this.totalAmount === 0) {
+    const net = (this.amount || 0) - (this.discount || 0) + (this.tax || 0);
     this.totalAmount = net < 0 ? 0 : net;
+  }
+  if (this.dueAmount == null) {
+    const due = (this.totalAmount || 0) - (this.paidAmount || 0);
+    this.dueAmount = due < 0 ? 0 : due;
   }
   next();
 });

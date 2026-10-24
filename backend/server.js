@@ -131,6 +131,7 @@ app.use('/api/patients', patientRoutes);
 app.use('/api/visits', visitRoutes);
 app.use('/api/appointments', appointmentRoutes);
 app.use('/api/bills', billRoutes);
+app.use('/api/quick-bill', billRoutes);
 app.use('/api/prescriptions', prescriptionRoutes);
 app.use('/api/accounts', accountRoutes);
 app.use('/api/campaigns', campaignRoutes);

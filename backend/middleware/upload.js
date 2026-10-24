@@ -24,7 +24,7 @@ const storage = multer.diskStorage({
   }
 });
 
-// File filter (accept images and pdfs with strict extension & mimetype whitelisting)
+// General file filter (accept images and pdfs)
 const allowedExts = new Set(['.jpg', '.jpeg', '.png', '.webp', '.pdf']);
 const allowedMimes = new Set(['image/jpeg', 'image/png', 'image/webp', 'application/pdf']);
 
@@ -39,10 +39,44 @@ const fileFilter = (req, file, cb) => {
   }
 };
 
+// Strict profile image filter (only JPEG, JPG, PNG, WEBP; NO PDFs)
+const profileImageExts = new Set(['.jpg', '.jpeg', '.png', '.webp']);
+const profileImageMimes = new Set(['image/jpeg', 'image/png', 'image/webp']);
+
+const profileImageFilter = (req, file, cb) => {
+  const ext = path.extname(file.originalname || '').toLowerCase();
+  const mimetype = (file.mimetype || '').toLowerCase();
+
+  if (profileImageExts.has(ext) && profileImageMimes.has(mimetype)) {
+    return cb(null, true);
+  } else {
+    const error = new Error('Only image files (JPEG, JPG, PNG, WEBP) are allowed for profile images.');
+    error.statusCode = 400;
+    cb(error);
+  }
+};
+
+
 const upload = multer({
   storage: storage,
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB max
   fileFilter: fileFilter
 });
 
+// Dedicated single profile image upload (strictly 1 file, images only)
+const uploadProfileImage = multer({
+  storage: storage,
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB max
+    files: 1 // Strictly 1 file max
+  },
+  fileFilter: profileImageFilter
+});
+
+export {
+  upload,
+  uploadProfileImage
+};
+
 export default upload;
+

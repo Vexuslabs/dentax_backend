@@ -5,10 +5,12 @@ import {
   getMe,
   updateProfile,
   setupClinic,
-  logout
+  logout,
+  refreshTokenHandler,
+  uploadAvatar
 } from '../controller/authController.js';
 import { protect } from '../middleware/auth.js';
-import upload from '../middleware/upload.js';
+import { upload, uploadProfileImage } from '../middleware/upload.js';
 
 import rateLimit from 'express-rate-limit';
 
@@ -29,6 +31,8 @@ const authLimiter = rateLimit({
 // Public endpoints
 router.post('/register', authLimiter, register);
 router.post('/login', authLimiter, login);
+router.post('/refresh-token', refreshTokenHandler);
+router.post('/refresh', refreshTokenHandler);
 router.post('/logout', logout);
 
 // Protected endpoints
@@ -43,6 +47,27 @@ router.put(
     { name: 'avatar', maxCount: 1 }
   ]),
   updateProfile
+);
+router.post(
+  '/profile/avatar',
+  protect,
+  (req, res, next) => {
+    uploadProfileImage.single('avatar')(req, res, (err) => {
+      if (err) return next(err);
+      if (!req.file) {
+        // Also check if field was named 'image' or 'file'
+        return uploadProfileImage.single('image')(req, res, (err2) => {
+          if (err2) return next(err2);
+          if (!req.file) {
+            return uploadProfileImage.single('file')(req, res, next);
+          }
+          next();
+        });
+      }
+      next();
+    });
+  },
+  uploadAvatar
 );
 router.post('/setup-clinic', protect, setupClinic);
 

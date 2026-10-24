@@ -6,12 +6,12 @@ import {
   updateCampaign,
   deleteCampaign
 } from '../controller/campaignController.js';
-import { optionalAuth } from '../middleware/auth.js';
+import { protect } from '../middleware/auth.js';
 import upload from '../middleware/upload.js';
 
 const router = express.Router();
 
-router.use(optionalAuth);
+router.use(protect);
 
 router.route('/')
   .post(upload.single('logo'), createCampaign)

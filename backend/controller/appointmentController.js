@@ -1,6 +1,6 @@
 import Appointment from '../model/Appointment.js';
 import Patient from '../model/Patient.js';
-import { escapeRegex, isValidObjectId } from '../utils/helpers.js';
+import { escapeRegex, isValidObjectId, getDoctorFilter, isOwnerOrAdmin } from '../utils/helpers.js';
 
 // Helper to normalize status across Flutter client variants
 const normalizeStatus = (status) => {
@@ -17,19 +17,18 @@ const normalizeStatus = (status) => {
   return status.trim();
 };
 
-// Helper to auto-update past scheduled appointments to Missed
-const autoCheckMissed = async () => {
+// Helper to auto-update past scheduled appointments to Missed scoped to doctor
+const autoCheckMissed = async (userId) => {
   try {
     const todayStr = new Date().toISOString().split('T')[0];
-    await Appointment.updateMany(
-      {
-        appointmentDate: { $lt: todayStr },
-        status: { $in: ['Scheduled', 'Confirmed', 'Booked'] }
-      },
-      {
-        $set: { status: 'Missed' }
-      }
-    );
+    const query = {
+      appointmentDate: { $lt: todayStr },
+      status: { $in: ['Scheduled', 'Confirmed', 'Booked', 'Pending'] }
+    };
+    if (userId) {
+      query.user = userId;
+    }
+    await Appointment.updateMany(query, { $set: { status: 'Missed' } });
   } catch (err) {
     console.error('Auto check missed appointments error:', err.message);
   }
@@ -37,10 +36,12 @@ const autoCheckMissed = async () => {
 
 // @desc    Create new appointment
 // @route   POST /api/appointments
-// @access  Public / Protected
+// @access  Protected
 const createAppointment = async (req, res, next) => {
   try {
     const {
+      patientId,
+      patient: patientInputId,
       patientName,
       name,
       phoneNumber,
@@ -59,49 +60,83 @@ const createAppointment = async (req, res, next) => {
       gender
     } = req.body;
 
-    const resolvedPatientName = (patientName || name || '').trim();
-    const resolvedPhone = (phoneNumber || mobileNumber || phone || '').trim();
+    let resolvedPatientName = (patientName || name || '').trim();
+    let resolvedPhone = (phoneNumber || mobileNumber || phone || '').trim();
     const resolvedDate = (appointmentDate || date || '').trim();
     const resolvedTime = (appointmentTime || time || '').trim();
 
-    if (!resolvedPatientName || !resolvedPhone || !resolvedDate || !resolvedTime) {
-      return res.status(400).json({
-        success: false,
-        message: 'Patient name, phone number, date, and time slot are required.'
+    const targetPatientId = patientId || patientInputId;
+    let resolvedPatient = null;
+
+    // 1. If patientId is provided, find patient by ID scoped to current doctor
+    if (targetPatientId) {
+      if (!isValidObjectId(targetPatientId)) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid patient ID format: ${targetPatientId}`
+        });
+      }
+
+      resolvedPatient = await Patient.findById(targetPatientId);
+      if (!resolvedPatient || !isOwnerOrAdmin(req, resolvedPatient)) {
+        return res.status(404).json({
+          success: false,
+          message: 'Patient not found or not authorized to access this patient.'
+        });
+      }
+
+      // Populate missing fields from patient record
+      if (!resolvedPatientName) resolvedPatientName = resolvedPatient.name;
+      if (!resolvedPhone) resolvedPhone = resolvedPatient.mobileNumber;
+    } else {
+      // 2. No patientId provided: find existing patient for this doctor or auto-create
+      if (!resolvedPatientName || !resolvedPhone) {
+        return res.status(400).json({
+          success: false,
+          message: 'Patient name and phone number (or a valid patientId) are required.'
+        });
+      }
+
+      const doctorQuery = getDoctorFilter(req);
+      resolvedPatient = await Patient.findOne({
+        ...doctorQuery,
+        $or: [
+          { name: resolvedPatientName },
+          { mobileNumber: resolvedPhone }
+        ]
       });
+
+      if (!resolvedPatient) {
+        resolvedPatient = await Patient.create({
+          user: req.user ? req.user.id : null,
+          name: resolvedPatientName,
+          mobileNumber: resolvedPhone,
+          dob: '2000-01-01',
+          gender: gender || 'Male'
+        });
+      }
     }
 
-    // Auto-link or create patient record if new
-    let patient = await Patient.findOne({
-      $or: [
-        { name: resolvedPatientName },
-        { mobileNumber: resolvedPhone }
-      ]
-    });
-
-    if (!patient) {
-      patient = await Patient.create({
-        user: req.user ? req.user.id : null,
-        name: resolvedPatientName,
-        mobileNumber: resolvedPhone,
-        dob: '2000-01-01',
-        gender: gender || 'Male'
+    if (!resolvedDate || !resolvedTime) {
+      return res.status(400).json({
+        success: false,
+        message: 'Appointment date and time slot are required.'
       });
     }
 
     const appointment = await Appointment.create({
       user: req.user ? req.user.id : null,
-      patient: patient._id,
+      patient: resolvedPatient._id,
       patientName: resolvedPatientName,
       phoneNumber: resolvedPhone,
       department: department || 'Dental',
-      doctorName: (doctorName || doctor || 'Dr. Self').trim(),
+      doctorName: (doctorName || doctor || req.user?.name || 'Dr. Self').trim(),
       visitType: visitType || 'Consultation',
       appointmentDate: resolvedDate,
       appointmentTime: resolvedTime,
       notes: (notes || '').trim(),
       status: normalizeStatus(status),
-      gender: gender || 'M'
+      gender: gender || (resolvedPatient.gender === 'Female' ? 'F' : 'M')
     });
 
     res.status(201).json({
@@ -114,23 +149,27 @@ const createAppointment = async (req, res, next) => {
   }
 };
 
-// @desc    Get all appointments with filters
+// @desc    Get all appointments with filters (isolated by doctor)
 // @route   GET /api/appointments
-// @access  Public / Protected
+// @access  Protected
 const getAllAppointments = async (req, res, next) => {
   try {
-    // Run background check for missed appointments
-    await autoCheckMissed();
+    const userId = req.user?.id;
+    await autoCheckMissed(userId);
 
-    const { date, status, department, doctorName, q } = req.query;
+    const { date, status, department, doctorName, patientId, q } = req.query;
 
-    const filter = {};
+    const filter = getDoctorFilter(req);
+
+    if (patientId && isValidObjectId(patientId)) {
+      filter.patient = patientId;
+    }
 
     if (date) {
       filter.appointmentDate = date;
     }
 
-    if (status && typeof status === 'string' && status.trim()) {
+    if (status && typeof status === 'string' && status.trim() && status !== 'All') {
       filter.status = new RegExp(`^${escapeRegex(status.trim())}$`, 'i');
     }
 
@@ -144,14 +183,19 @@ const getAllAppointments = async (req, res, next) => {
 
     if (q && typeof q === 'string' && q.trim()) {
       const regex = new RegExp(escapeRegex(q.trim()), 'i');
-      filter.$or = [
-        { patientName: regex },
-        { phoneNumber: regex },
-        { notes: regex }
-      ];
+      filter.$and = filter.$and || [];
+      filter.$and.push({
+        $or: [
+          { patientName: regex },
+          { phoneNumber: regex },
+          { notes: regex }
+        ]
+      });
     }
 
-    const appointments = await Appointment.find(filter).sort({ appointmentDate: 1, appointmentTime: 1 });
+    const appointments = await Appointment.find(filter)
+      .populate('patient')
+      .sort({ appointmentDate: 1, appointmentTime: 1 });
 
     res.status(200).json({
       success: true,
@@ -163,16 +207,20 @@ const getAllAppointments = async (req, res, next) => {
   }
 };
 
-// @desc    Get today's appointments
+// @desc    Get today's appointments for current doctor
 // @route   GET /api/appointments/today
-// @access  Public / Protected
+// @access  Protected
 const getTodaysAppointments = async (req, res, next) => {
   try {
     const todayStr = new Date().toISOString().split('T')[0];
-
-    const appointments = await Appointment.find({
+    const filter = {
+      ...getDoctorFilter(req),
       appointmentDate: todayStr
-    }).sort({ appointmentTime: 1 });
+    };
+
+    const appointments = await Appointment.find(filter)
+      .populate('patient')
+      .sort({ appointmentTime: 1 });
 
     res.status(200).json({
       success: true,
@@ -185,16 +233,22 @@ const getTodaysAppointments = async (req, res, next) => {
   }
 };
 
-// @desc    Get missed appointments
+// @desc    Get missed appointments for current doctor
 // @route   GET /api/appointments/missed
-// @access  Public / Protected
+// @access  Protected
 const getMissedAppointments = async (req, res, next) => {
   try {
-    await autoCheckMissed();
+    const userId = req.user?.id;
+    await autoCheckMissed(userId);
 
-    const appointments = await Appointment.find({
+    const filter = {
+      ...getDoctorFilter(req),
       status: 'Missed'
-    }).sort({ appointmentDate: -1 });
+    };
+
+    const appointments = await Appointment.find(filter)
+      .populate('patient')
+      .sort({ appointmentDate: -1 });
 
     res.status(200).json({
       success: true,
@@ -208,7 +262,7 @@ const getMissedAppointments = async (req, res, next) => {
 
 // @desc    Update appointment status
 // @route   PATCH /api/appointments/:id/status
-// @access  Public / Protected
+// @access  Protected
 const updateAppointmentStatus = async (req, res, next) => {
   try {
     const { status } = req.body;
@@ -227,24 +281,22 @@ const updateAppointmentStatus = async (req, res, next) => {
       });
     }
 
-    const normalizedStatus = normalizeStatus(status);
+    const appointment = await Appointment.findById(req.params.id);
 
-    const appointment = await Appointment.findByIdAndUpdate(
-      req.params.id,
-      { status: normalizedStatus },
-      { new: true, runValidators: true }
-    );
-
-    if (!appointment) {
+    if (!appointment || !isOwnerOrAdmin(req, appointment)) {
       return res.status(404).json({
         success: false,
         message: 'Appointment not found'
       });
     }
 
+    const normalizedStatus = normalizeStatus(status);
+    appointment.status = normalizedStatus;
+    await appointment.save();
+
     res.status(200).json({
       success: true,
-      message: `Appointment status updated to ${status}`,
+      message: `Appointment status updated to ${normalizedStatus}`,
       data: appointment
     });
   } catch (error) {
@@ -254,8 +306,38 @@ const updateAppointmentStatus = async (req, res, next) => {
 
 // @desc    Get appointment by ID
 // @route   GET /api/appointments/:id
-// @access  Public / Protected
+// @access  Protected
 const getAppointmentById = async (req, res, next) => {
+  try {
+    if (!isValidObjectId(req.params.id)) {
+      return res.status(404).json({
+        success: false,
+        message: 'Appointment not found'
+      });
+    }
+
+    const appointment = await Appointment.findById(req.params.id).populate('patient');
+
+    if (!appointment || !isOwnerOrAdmin(req, appointment)) {
+      return res.status(404).json({
+        success: false,
+        message: 'Appointment not found'
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: appointment
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Update appointment details
+// @route   PUT /api/appointments/:id or PATCH /api/appointments/:id
+// @access  Protected
+const updateAppointment = async (req, res, next) => {
   try {
     if (!isValidObjectId(req.params.id)) {
       return res.status(404).json({
@@ -266,15 +348,71 @@ const getAppointmentById = async (req, res, next) => {
 
     const appointment = await Appointment.findById(req.params.id);
 
-    if (!appointment) {
+    if (!appointment || !isOwnerOrAdmin(req, appointment)) {
       return res.status(404).json({
         success: false,
         message: 'Appointment not found'
       });
     }
 
+    const {
+      patientId,
+      patient: patientInputId,
+      patientName,
+      name,
+      phoneNumber,
+      mobileNumber,
+      phone,
+      department,
+      doctorName,
+      doctor,
+      visitType,
+      appointmentDate,
+      date,
+      appointmentTime,
+      time,
+      notes,
+      status,
+      gender
+    } = req.body;
+
+    const targetPatientId = patientId || patientInputId;
+    if (targetPatientId) {
+      if (!isValidObjectId(targetPatientId)) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid patient ID format: ${targetPatientId}`
+        });
+      }
+      const patientDoc = await Patient.findById(targetPatientId);
+      if (!patientDoc || !isOwnerOrAdmin(req, patientDoc)) {
+        return res.status(404).json({
+          success: false,
+          message: 'Patient not found'
+        });
+      }
+      appointment.patient = patientDoc._id;
+      if (!patientName && !name) appointment.patientName = patientDoc.name;
+      if (!phoneNumber && !mobileNumber && !phone) appointment.phoneNumber = patientDoc.mobileNumber;
+    }
+
+    if (patientName || name) appointment.patientName = (patientName || name).trim();
+    if (phoneNumber || mobileNumber || phone) appointment.phoneNumber = (phoneNumber || mobileNumber || phone).trim();
+    if (department) appointment.department = department.trim();
+    if (doctorName || doctor) appointment.doctorName = (doctorName || doctor).trim();
+    if (visitType) appointment.visitType = visitType.trim();
+    if (appointmentDate || date) appointment.appointmentDate = (appointmentDate || date).trim();
+    if (appointmentTime || time) appointment.appointmentTime = (appointmentTime || time).trim();
+    if (status) appointment.status = normalizeStatus(status);
+    if (notes !== undefined) appointment.notes = String(notes).trim();
+    if (gender) appointment.gender = gender;
+
+    await appointment.save();
+    await appointment.populate('patient');
+
     res.status(200).json({
       success: true,
+      message: 'Appointment updated successfully',
       data: appointment
     });
   } catch (error) {
@@ -284,7 +422,7 @@ const getAppointmentById = async (req, res, next) => {
 
 // @desc    Delete appointment
 // @route   DELETE /api/appointments/:id
-// @access  Public / Protected
+// @access  Protected
 const deleteAppointment = async (req, res, next) => {
   try {
     if (!isValidObjectId(req.params.id)) {
@@ -294,14 +432,16 @@ const deleteAppointment = async (req, res, next) => {
       });
     }
 
-    const appointment = await Appointment.findByIdAndDelete(req.params.id);
+    const appointment = await Appointment.findById(req.params.id);
 
-    if (!appointment) {
+    if (!appointment || !isOwnerOrAdmin(req, appointment)) {
       return res.status(404).json({
         success: false,
         message: 'Appointment not found'
       });
     }
+
+    await appointment.deleteOne();
 
     res.status(200).json({
       success: true,
@@ -317,6 +457,7 @@ export {
   getAllAppointments,
   getTodaysAppointments,
   getMissedAppointments,
+  updateAppointment,
   updateAppointmentStatus,
   getAppointmentById,
   deleteAppointment
@@ -327,6 +468,7 @@ export default {
   getAllAppointments,
   getTodaysAppointments,
   getMissedAppointments,
+  updateAppointment,
   updateAppointmentStatus,
   getAppointmentById,
   deleteAppointment

@@ -3,11 +3,11 @@ import {
   getDashboardSummary,
   searchPatients
 } from '../controller/dashboardController.js';
-import { optionalAuth } from '../middleware/auth.js';
+import { protect } from '../middleware/auth.js';
 
 const router = express.Router();
 
-router.use(optionalAuth);
+router.use(protect);
 
 router.get('/summary', getDashboardSummary);
 router.get('/search', searchPatients);

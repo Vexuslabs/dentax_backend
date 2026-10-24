@@ -1,17 +1,14 @@
 import Notification from '../model/Notification.js';
-import { isValidObjectId } from '../utils/helpers.js';
+import { isValidObjectId, getDoctorFilter, isOwnerOrAdmin } from '../utils/helpers.js';
 
-// @desc    Get all notifications for current doctor/user
+// @desc    Get all notifications for current doctor/user (doctor-isolated)
 // @route   GET /api/notifications
-// @access  Protected / Public
+// @access  Protected
 const getNotifications = async (req, res, next) => {
   try {
     const { unreadOnly, type } = req.query;
 
-    const filter = {};
-    if (req.user) {
-      filter.$or = [{ user: req.user.id }, { user: null }];
-    }
+    const filter = getDoctorFilter(req);
 
     if (unreadOnly === 'true' || unreadOnly === true) {
       filter.isRead = false;
@@ -24,7 +21,7 @@ const getNotifications = async (req, res, next) => {
     const [notifications, unreadCount] = await Promise.all([
       Notification.find(filter).sort({ createdAt: -1 }),
       Notification.countDocuments({
-        ...(req.user ? { $or: [{ user: req.user.id }, { user: null }] } : {}),
+        ...getDoctorFilter(req),
         isRead: false
       })
     ]);
@@ -42,7 +39,7 @@ const getNotifications = async (req, res, next) => {
 
 // @desc    Mark single notification as read
 // @route   PATCH /api/notifications/:id/read
-// @access  Protected / Public
+// @access  Protected
 const markAsRead = async (req, res, next) => {
   try {
     if (!isValidObjectId(req.params.id)) {
@@ -52,18 +49,17 @@ const markAsRead = async (req, res, next) => {
       });
     }
 
-    const notification = await Notification.findByIdAndUpdate(
-      req.params.id,
-      { isRead: true },
-      { new: true }
-    );
+    const notification = await Notification.findById(req.params.id);
 
-    if (!notification) {
+    if (!notification || !isOwnerOrAdmin(req, notification)) {
       return res.status(404).json({
         success: false,
         message: 'Notification not found'
       });
     }
+
+    notification.isRead = true;
+    await notification.save();
 
     res.status(200).json({
       success: true,
@@ -75,16 +71,12 @@ const markAsRead = async (req, res, next) => {
   }
 };
 
-// @desc    Mark all notifications as read
+// @desc    Mark all notifications as read (doctor-isolated)
 // @route   PATCH /api/notifications/read-all
-// @access  Protected / Public
+// @access  Protected
 const markAllAsRead = async (req, res, next) => {
   try {
-    const filter = {};
-    if (req.user) {
-      filter.$or = [{ user: req.user.id }, { user: null }];
-    }
-
+    const filter = getDoctorFilter(req);
     await Notification.updateMany(filter, { $set: { isRead: true } });
 
     res.status(200).json({
@@ -96,16 +88,12 @@ const markAllAsRead = async (req, res, next) => {
   }
 };
 
-// @desc    Clear all notifications
+// @desc    Clear all notifications (doctor-isolated)
 // @route   DELETE /api/notifications
-// @access  Protected / Public
+// @access  Protected
 const clearAllNotifications = async (req, res, next) => {
   try {
-    const filter = {};
-    if (req.user) {
-      filter.$or = [{ user: req.user.id }, { user: null }];
-    }
-
+    const filter = getDoctorFilter(req);
     await Notification.deleteMany(filter);
 
     res.status(200).json({
@@ -119,7 +107,7 @@ const clearAllNotifications = async (req, res, next) => {
 
 // @desc    Delete single notification
 // @route   DELETE /api/notifications/:id
-// @access  Protected / Public
+// @access  Protected
 const deleteNotification = async (req, res, next) => {
   try {
     if (!isValidObjectId(req.params.id)) {
@@ -129,14 +117,16 @@ const deleteNotification = async (req, res, next) => {
       });
     }
 
-    const notification = await Notification.findByIdAndDelete(req.params.id);
+    const notification = await Notification.findById(req.params.id);
 
-    if (!notification) {
+    if (!notification || !isOwnerOrAdmin(req, notification)) {
       return res.status(404).json({
         success: false,
         message: 'Notification not found'
       });
     }
+
+    await notification.deleteOne();
 
     res.status(200).json({
       success: true,
@@ -149,7 +139,7 @@ const deleteNotification = async (req, res, next) => {
 
 // @desc    Create a notification
 // @route   POST /api/notifications
-// @access  Protected / Public
+// @access  Protected
 const createNotification = async (req, res, next) => {
   try {
     const { title, message, type, metadata } = req.body;

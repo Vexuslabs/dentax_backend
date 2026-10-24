@@ -1,15 +1,17 @@
 import Prescription from '../model/Prescription.js';
 import Patient from '../model/Patient.js';
-import { escapeRegex, isValidObjectId } from '../utils/helpers.js';
+import { escapeRegex, isValidObjectId, getDoctorFilter, isOwnerOrAdmin } from '../utils/helpers.js';
 
 // @desc    Create new prescription
 // @route   POST /api/prescriptions
-// @access  Public / Protected
+// @access  Protected
 const createPrescription = async (req, res, next) => {
   try {
     const {
       patientId,
+      patient: patientInputId,
       patientName,
+      name,
       doctorName,
       diagnosis,
       notes,
@@ -20,13 +22,48 @@ const createPrescription = async (req, res, next) => {
       followUpDate
     } = req.body;
 
-    const resolvedPatientName = (patientName || '').trim();
+    let resolvedPatientName = (patientName || name || '').trim();
     const resolvedDiagnosis = (diagnosis || notes || '').trim();
 
-    if (!resolvedPatientName || !resolvedDiagnosis) {
+    const targetPatientId = patientId || patientInputId;
+    let resolvedPatient = null;
+
+    if (targetPatientId) {
+      if (!isValidObjectId(targetPatientId)) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid patient ID format: ${targetPatientId}`
+        });
+      }
+
+      resolvedPatient = await Patient.findById(targetPatientId);
+      if (!resolvedPatient || !isOwnerOrAdmin(req, resolvedPatient)) {
+        return res.status(404).json({
+          success: false,
+          message: 'Patient not found or not authorized to access this patient.'
+        });
+      }
+
+      if (!resolvedPatientName) resolvedPatientName = resolvedPatient.name;
+    } else {
+      if (!resolvedPatientName) {
+        return res.status(400).json({
+          success: false,
+          message: 'Patient name or valid patientId is required.'
+        });
+      }
+
+      const doctorQuery = getDoctorFilter(req);
+      resolvedPatient = await Patient.findOne({
+        ...doctorQuery,
+        name: resolvedPatientName
+      });
+    }
+
+    if (!resolvedDiagnosis) {
       return res.status(400).json({
         success: false,
-        message: 'Patient name and diagnosis are required.'
+        message: 'Diagnosis is required.'
       });
     }
 
@@ -48,26 +85,19 @@ const createPrescription = async (req, res, next) => {
       parsedMedicines = medicines
         .split(',')
         .filter((s) => s.trim().length > 0)
-        .map((name) => ({
-          name: name.trim(),
+        .map((nameStr) => ({
+          name: nameStr.trim(),
           dosage: '',
           duration: '',
           timing: ''
         }));
     }
 
-    // Auto-link patient if exists
-    let resolvedPatientId = patientId;
-    if (!resolvedPatientId) {
-      const patient = await Patient.findOne({ name: resolvedPatientName });
-      if (patient) resolvedPatientId = patient._id;
-    }
-
     const prescription = await Prescription.create({
       user: req.user ? req.user.id : null,
-      patient: resolvedPatientId,
+      patient: resolvedPatient ? resolvedPatient._id : null,
       patientName: resolvedPatientName,
-      doctorName: (doctorName || 'Dr. Self').trim(),
+      doctorName: (doctorName || req.user?.name || 'Dr. Self').trim(),
       diagnosis: resolvedDiagnosis,
       tag: tag || resolvedDiagnosis,
       medicines: parsedMedicines,
@@ -86,23 +116,30 @@ const createPrescription = async (req, res, next) => {
   }
 };
 
-// @desc    Get all prescriptions with filters & search
+// @desc    Get all prescriptions with filters & search (doctor-isolated)
 // @route   GET /api/prescriptions
-// @access  Public / Protected
+// @access  Protected
 const getAllPrescriptions = async (req, res, next) => {
   try {
-    const { q, filter, status } = req.query;
+    const { q, filter, status, patientId } = req.query;
 
-    const queryObj = {};
+    const queryObj = getDoctorFilter(req);
+
+    if (patientId && isValidObjectId(patientId)) {
+      queryObj.patient = patientId;
+    }
 
     if (q && typeof q === 'string' && q.trim()) {
       const regex = new RegExp(escapeRegex(q.trim()), 'i');
-      queryObj.$or = [
-        { patientName: regex },
-        { doctorName: regex },
-        { diagnosis: regex },
-        { 'medicines.name': regex }
-      ];
+      queryObj.$and = queryObj.$and || [];
+      queryObj.$and.push({
+        $or: [
+          { patientName: regex },
+          { doctorName: regex },
+          { diagnosis: regex },
+          { 'medicines.name': regex }
+        ]
+      });
     }
 
     if (status && status !== 'All') {
@@ -126,7 +163,9 @@ const getAllPrescriptions = async (req, res, next) => {
       }
     }
 
-    const prescriptions = await Prescription.find(queryObj).sort({ createdAt: -1 });
+    const prescriptions = await Prescription.find(queryObj)
+      .populate('patient')
+      .sort({ createdAt: -1 });
 
     res.status(200).json({
       success: true,
@@ -140,7 +179,7 @@ const getAllPrescriptions = async (req, res, next) => {
 
 // @desc    Get prescription by ID
 // @route   GET /api/prescriptions/:id
-// @access  Public / Protected
+// @access  Protected
 const getPrescriptionById = async (req, res, next) => {
   try {
     if (!isValidObjectId(req.params.id)) {
@@ -150,9 +189,9 @@ const getPrescriptionById = async (req, res, next) => {
       });
     }
 
-    const prescription = await Prescription.findById(req.params.id);
+    const prescription = await Prescription.findById(req.params.id).populate('patient');
 
-    if (!prescription) {
+    if (!prescription || !isOwnerOrAdmin(req, prescription)) {
       return res.status(404).json({
         success: false,
         message: 'Prescription not found'
@@ -170,7 +209,7 @@ const getPrescriptionById = async (req, res, next) => {
 
 // @desc    Update prescription
 // @route   PUT /api/prescriptions/:id
-// @access  Public / Protected
+// @access  Protected
 const updatePrescription = async (req, res, next) => {
   try {
     if (!isValidObjectId(req.params.id)) {
@@ -180,22 +219,36 @@ const updatePrescription = async (req, res, next) => {
       });
     }
 
-    const prescription = await Prescription.findByIdAndUpdate(req.params.id, req.body, {
-      new: true,
-      runValidators: true
-    });
+    const prescription = await Prescription.findById(req.params.id);
 
-    if (!prescription) {
+    if (!prescription || !isOwnerOrAdmin(req, prescription)) {
       return res.status(404).json({
         success: false,
         message: 'Prescription not found'
       });
     }
 
+    const updateData = { ...req.body };
+    delete updateData.user;
+
+    const { patientId, patient: patientInputId } = req.body;
+    const targetPatientId = patientId || patientInputId;
+    if (targetPatientId && isValidObjectId(targetPatientId)) {
+      const patientDoc = await Patient.findById(targetPatientId);
+      if (patientDoc && isOwnerOrAdmin(req, patientDoc)) {
+        updateData.patient = patientDoc._id;
+      }
+    }
+
+    const updatedPrescription = await Prescription.findByIdAndUpdate(req.params.id, updateData, {
+      new: true,
+      runValidators: true
+    }).populate('patient');
+
     res.status(200).json({
       success: true,
       message: 'Prescription updated successfully',
-      data: prescription
+      data: updatedPrescription
     });
   } catch (error) {
     next(error);
@@ -204,7 +257,7 @@ const updatePrescription = async (req, res, next) => {
 
 // @desc    Delete prescription
 // @route   DELETE /api/prescriptions/:id
-// @access  Public / Protected
+// @access  Protected
 const deletePrescription = async (req, res, next) => {
   try {
     if (!isValidObjectId(req.params.id)) {
@@ -214,14 +267,16 @@ const deletePrescription = async (req, res, next) => {
       });
     }
 
-    const prescription = await Prescription.findByIdAndDelete(req.params.id);
+    const prescription = await Prescription.findById(req.params.id);
 
-    if (!prescription) {
+    if (!prescription || !isOwnerOrAdmin(req, prescription)) {
       return res.status(404).json({
         success: false,
         message: 'Prescription not found'
       });
     }
+
+    await prescription.deleteOne();
 
     res.status(200).json({
       success: true,

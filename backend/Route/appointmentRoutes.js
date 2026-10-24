@@ -4,15 +4,17 @@ import {
   getAllAppointments,
   getTodaysAppointments,
   getMissedAppointments,
+  updateAppointment,
   updateAppointmentStatus,
   getAppointmentById,
   deleteAppointment
 } from '../controller/appointmentController.js';
-import { optionalAuth } from '../middleware/auth.js';
+import { protect } from '../middleware/auth.js';
 
 const router = express.Router();
 
-router.use(optionalAuth);
+// Enforce authentication on all appointment operations
+router.use(protect);
 
 // Specialized endpoints
 router.get('/today', getTodaysAppointments);
@@ -26,6 +28,8 @@ router.route('/')
 
 router.route('/:id')
   .get(getAppointmentById)
+  .put(updateAppointment)
+  .patch(updateAppointment)
   .delete(deleteAppointment);
 
 export default router;

@@ -5,16 +5,17 @@ import {
   generateReport,
   getPatientDossier
 } from '../controller/reportController.js';
-import { optionalAuth } from '../middleware/auth.js';
+import { protect } from '../middleware/auth.js';
 
 const router = express.Router();
 
-router.use(optionalAuth);
+router.use(protect);
 
 router.get('/saved', getAllSavedReports);
 router.post('/save', saveReport);
-router.get('/generate', generateReport);
-router.post('/generate', generateReport);
+router.route('/generate')
+  .get(generateReport)
+  .post(generateReport);
 router.get('/patient-dossier/:patientId', getPatientDossier);
 
 export default router;

@@ -43,13 +43,18 @@ const errorHandler = (err, req, res, next) => {
     error = { statusCode: 401, message: 'Authentication token expired.' };
   }
 
-  // Multer file upload errors
-  if (err.name === 'MulterError') {
-    const message = err.code === 'LIMIT_FILE_SIZE'
-      ? 'File size exceeds limit (10MB maximum).'
-      : `Upload error: ${err.message}`;
+  // Multer file upload errors & custom file filter errors
+  if (err.name === 'MulterError' || (err.message && (err.message.includes('Only images') || err.message.includes('Only image files')))) {
+    let message = err.message;
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      message = 'File size exceeds limit (maximum allowed size reached).';
+    } else if (err.code === 'LIMIT_FILE_COUNT' || err.code === 'LIMIT_UNEXPECTED_FILE') {
+      message = 'Only a single profile image file is allowed. Multiple images are not supported.';
+    }
     error = { statusCode: 400, message };
   }
+
+
 
   let statusCode = error.statusCode;
   if (!statusCode) {

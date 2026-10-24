@@ -7,11 +7,11 @@ import {
   deleteBill,
   getBillStats
 } from '../controller/billController.js';
-import { optionalAuth } from '../middleware/auth.js';
+import { protect } from '../middleware/auth.js';
 
 const router = express.Router();
 
-router.use(optionalAuth);
+router.use(protect);
 
 router.get('/stats', getBillStats);
 

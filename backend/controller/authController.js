@@ -1,8 +1,10 @@
+import jwt from 'jsonwebtoken';
 import User from '../model/User.js';
 
 // Helper to return user token response
 const sendTokenResponse = (user, statusCode, res, message = 'Success') => {
   const token = user.getSignedJwtToken();
+  const refreshToken = user.getSignedRefreshToken ? user.getSignedRefreshToken() : '';
   const userObj = user.toObject();
   delete userObj.password;
 
@@ -10,9 +12,12 @@ const sendTokenResponse = (user, statusCode, res, message = 'Success') => {
     success: true,
     message,
     token,
+    accessToken: token,
+    refreshToken,
     user: userObj
   });
 };
+
 
 // @desc    Register a new user / doctor
 // @route   POST /api/auth/register
@@ -233,13 +238,95 @@ const logout = async (req, res) => {
   });
 };
 
+// @desc    Refresh access token using refresh token
+// @route   POST /api/auth/refresh-token or POST /api/auth/refresh
+// @access  Public
+const refreshTokenHandler = async (req, res, next) => {
+  try {
+    const { refreshToken } = req.body;
+    const token = refreshToken || req.headers['x-refresh-token'];
+
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        message: 'Refresh token is required.'
+      });
+    }
+
+    let decoded;
+    try {
+      decoded = jwt.verify(
+        token,
+        process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET || 'dentalbox_super_secret_jwt_refresh_key_2026_secure'
+      );
+    } catch (_) {
+      try {
+        decoded = jwt.verify(
+          token,
+          process.env.JWT_SECRET || 'dentalbox_super_secret_jwt_key_2026_secure'
+        );
+      } catch (err) {
+        return res.status(401).json({
+          success: false,
+          message: 'Invalid or expired refresh token. Please login again.'
+        });
+      }
+    }
+
+    const user = await User.findById(decoded.id);
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: 'The user belonging to this token no longer exists.'
+      });
+    }
+
+    sendTokenResponse(user, 200, res, 'Token refreshed successfully');
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Upload single profile image / avatar
+// @route   POST /api/auth/profile/avatar
+// @access  Private
+const uploadAvatar = async (req, res, next) => {
+  try {
+    const file = req.file;
+    if (!file) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please upload a single profile image file.'
+      });
+    }
+
+    const avatarUrl = `/uploads/${file.filename}`;
+    const user = await User.findByIdAndUpdate(
+      req.user.id,
+      { avatar: avatarUrl },
+      { new: true }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: 'Profile image updated successfully',
+      avatar: avatarUrl,
+      user
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 export {
   register,
   login,
   getMe,
   updateProfile,
   setupClinic,
-  logout
+  logout,
+  refreshTokenHandler,
+  uploadAvatar
 };
 
 export default {
@@ -248,6 +335,9 @@ export default {
   getMe,
   updateProfile,
   setupClinic,
-  logout
+  logout,
+  refreshTokenHandler,
+  uploadAvatar
 };
+
 

@@ -10,11 +10,11 @@ import {
   createPurchaseOrder,
   updatePurchaseOrderStatus
 } from '../controller/inventoryController.js';
-import { optionalAuth } from '../middleware/auth.js';
+import { protect } from '../middleware/auth.js';
 
 const router = express.Router();
 
-router.use(optionalAuth);
+router.use(protect);
 
 // Transactions (Stock In / Stock Out)
 router.route('/transactions')

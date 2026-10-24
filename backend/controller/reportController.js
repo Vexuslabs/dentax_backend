@@ -3,14 +3,15 @@ import Patient from '../model/Patient.js';
 import PatientVisit from '../model/PatientVisit.js';
 import Bill from '../model/Bill.js';
 import Appointment from '../model/Appointment.js';
-import { isValidObjectId } from '../utils/helpers.js';
+import { isValidObjectId, getDoctorFilter, isOwnerOrAdmin } from '../utils/helpers.js';
 
-// @desc    Get all saved reports
+// @desc    Get all saved reports (doctor-isolated)
 // @route   GET /api/reports/saved
-// @access  Public / Protected
+// @access  Protected
 const getAllSavedReports = async (req, res, next) => {
   try {
-    const reports = await Report.find().sort({ createdAt: -1 });
+    const filter = getDoctorFilter(req);
+    const reports = await Report.find(filter).sort({ createdAt: -1 });
 
     res.status(200).json({
       success: true,
@@ -24,7 +25,7 @@ const getAllSavedReports = async (req, res, next) => {
 
 // @desc    Save a generated report
 // @route   POST /api/reports/save
-// @access  Public / Protected
+// @access  Protected
 const saveReport = async (req, res, next) => {
   try {
     const { title, type, fromDate, toDate, data, reportData, generatedBy } = req.body;
@@ -56,9 +57,9 @@ const saveReport = async (req, res, next) => {
   }
 };
 
-// @desc    Generate dynamic report on-the-fly
+// @desc    Generate dynamic report on-the-fly (doctor-isolated)
 // @route   GET & POST /api/reports/generate
-// @access  Public / Protected
+// @access  Protected
 const generateReport = async (req, res, next) => {
   try {
     const title = req.body?.title || req.query?.title || '';
@@ -70,7 +71,12 @@ const generateReport = async (req, res, next) => {
     const from = fromDate ? new Date(fromDate) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     const to = toDate ? new Date(toDate) : new Date();
 
-    const dateFilter = { createdAt: { $gte: from, $lte: to } };
+    const userMatch = req.user && req.user.role !== 'Admin'
+      ? { user: req.user._id }
+      : {};
+
+    const dateFilter = { ...userMatch, createdAt: { $gte: from, $lte: to } };
+    const doctorScope = getDoctorFilter(req);
 
     let generatedData = {};
 
@@ -111,7 +117,10 @@ const generateReport = async (req, res, next) => {
       }
 
       case 'Treatment Wise Report': {
-        const visits = await PatientVisit.find({ visitDate: { $gte: from, $lte: to } });
+        const visits = await PatientVisit.find({
+          ...doctorScope,
+          visitDate: { $gte: from, $lte: to }
+        });
         const treatmentCounts = {};
         let totalRevenue = 0;
 
@@ -144,7 +153,7 @@ const generateReport = async (req, res, next) => {
       case 'Doctor Wise Visit Report':
       case 'Doctor Wise Payment Report': {
         const doctorVisits = await PatientVisit.aggregate([
-          { $match: { visitDate: { $gte: from, $lte: to } } },
+          { $match: { ...userMatch, visitDate: { $gte: from, $lte: to } } },
           {
             $group: {
               _id: '$doctorName',
@@ -167,7 +176,7 @@ const generateReport = async (req, res, next) => {
       }
 
       case 'Birthday Report': {
-        const allPatients = await Patient.find();
+        const allPatients = await Patient.find(doctorScope);
         const currentMonth = new Date().getMonth() + 1;
 
         const birthdayPatients = allPatients.filter((p) => {
@@ -197,6 +206,7 @@ const generateReport = async (req, res, next) => {
 
       case 'Follow-up Due Report': {
         const followUps = await PatientVisit.find({
+          ...doctorScope,
           followUpDate: { $ne: '' }
         }).sort({ visitDate: -1 });
 
@@ -235,9 +245,9 @@ const generateReport = async (req, res, next) => {
   }
 };
 
-// @desc    Get complete patient dossier
+// @desc    Get complete patient dossier (ID-based data retrieval and authorization)
 // @route   GET /api/reports/patient-dossier/:patientId
-// @access  Public / Protected
+// @access  Protected
 const getPatientDossier = async (req, res, next) => {
   try {
     if (!isValidObjectId(req.params.patientId)) {
@@ -249,17 +259,28 @@ const getPatientDossier = async (req, res, next) => {
 
     const patient = await Patient.findById(req.params.patientId);
 
-    if (!patient) {
+    if (!patient || !isOwnerOrAdmin(req, patient)) {
       return res.status(404).json({
         success: false,
         message: 'Patient not found'
       });
     }
 
+    const doctorScope = getDoctorFilter(req);
+
     const [visits, bills, appointments] = await Promise.all([
-      PatientVisit.find({ $or: [{ patient: patient._id }, { patientName: patient.name }] }),
-      Bill.find({ $or: [{ patient: patient._id }, { patientName: patient.name }] }),
-      Appointment.find({ $or: [{ patient: patient._id }, { patientName: patient.name }] })
+      PatientVisit.find({
+        ...doctorScope,
+        $or: [{ patient: patient._id }, { patientName: patient.name }]
+      }),
+      Bill.find({
+        ...doctorScope,
+        $or: [{ patient: patient._id }, { patientName: patient.name }]
+      }),
+      Appointment.find({
+        ...doctorScope,
+        $or: [{ patient: patient._id }, { patientName: patient.name }]
+      })
     ]);
 
     const dossier = {

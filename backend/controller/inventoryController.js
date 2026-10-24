@@ -1,18 +1,18 @@
 import Inventory from '../model/Inventory.js';
 import InventoryTransaction from '../model/InventoryTransaction.js';
 import PurchaseOrder from '../model/PurchaseOrder.js';
-import { escapeRegex, isValidObjectId } from '../utils/helpers.js';
+import { escapeRegex, isValidObjectId, getDoctorFilter, isOwnerOrAdmin } from '../utils/helpers.js';
 
 // ================= INVENTORY ITEMS =================
 
-// @desc    Get all inventory items
+// @desc    Get all inventory items (doctor-isolated)
 // @route   GET /api/inventory
-// @access  Public / Protected
+// @access  Protected
 const getAllInventory = async (req, res, next) => {
   try {
     const { category, status, q } = req.query;
 
-    const filter = {};
+    const filter = getDoctorFilter(req);
 
     if (category && category !== 'All' && category !== 'Select category') {
       filter.category = category;
@@ -24,11 +24,14 @@ const getAllInventory = async (req, res, next) => {
 
     if (q && typeof q === 'string' && q.trim()) {
       const regex = new RegExp(escapeRegex(q.trim()), 'i');
-      filter.$or = [
-        { productName: regex },
-        { category: regex },
-        { description: regex }
-      ];
+      filter.$and = filter.$and || [];
+      filter.$and.push({
+        $or: [
+          { productName: regex },
+          { category: regex },
+          { description: regex }
+        ]
+      });
     }
 
     const items = await Inventory.find(filter).sort({ productName: 1 });
@@ -59,7 +62,7 @@ const getAllInventory = async (req, res, next) => {
 
 // @desc    Add new inventory item
 // @route   POST /api/inventory
-// @access  Public / Protected
+// @access  Protected
 const addInventoryItem = async (req, res, next) => {
   try {
     const {
@@ -114,7 +117,7 @@ const addInventoryItem = async (req, res, next) => {
 
 // @desc    Update inventory item
 // @route   PUT /api/inventory/:id
-// @access  Public / Protected
+// @access  Protected
 const updateInventoryItem = async (req, res, next) => {
   try {
     if (!isValidObjectId(req.params.id)) {
@@ -126,15 +129,18 @@ const updateInventoryItem = async (req, res, next) => {
 
     const item = await Inventory.findById(req.params.id);
 
-    if (!item) {
+    if (!item || !isOwnerOrAdmin(req, item)) {
       return res.status(404).json({
         success: false,
         message: 'Item not found in inventory'
       });
     }
 
-    Object.assign(item, req.body);
-    await item.save(); // triggers pre-save status update
+    const updateData = { ...req.body };
+    delete updateData.user;
+
+    Object.assign(item, updateData);
+    await item.save();
 
     res.status(200).json({
       success: true,
@@ -148,7 +154,7 @@ const updateInventoryItem = async (req, res, next) => {
 
 // @desc    Delete inventory item
 // @route   DELETE /api/inventory/:id
-// @access  Public / Protected
+// @access  Protected
 const deleteInventoryItem = async (req, res, next) => {
   try {
     if (!isValidObjectId(req.params.id)) {
@@ -158,14 +164,16 @@ const deleteInventoryItem = async (req, res, next) => {
       });
     }
 
-    const item = await Inventory.findByIdAndDelete(req.params.id);
+    const item = await Inventory.findById(req.params.id);
 
-    if (!item) {
+    if (!item || !isOwnerOrAdmin(req, item)) {
       return res.status(404).json({
         success: false,
         message: 'Item not found in inventory'
       });
     }
+
+    await item.deleteOne();
 
     res.status(200).json({
       success: true,
@@ -180,7 +188,7 @@ const deleteInventoryItem = async (req, res, next) => {
 
 // @desc    Record Stock In / Stock Out
 // @route   POST /api/inventory/transactions
-// @access  Public / Protected
+// @access  Protected
 const recordStockTransaction = async (req, res, next) => {
   try {
     const { inventoryId, type, title, category, quantity, amount, remarks } = req.body;
@@ -193,13 +201,17 @@ const recordStockTransaction = async (req, res, next) => {
     }
 
     const qty = Number(quantity || 1);
+    const doctorScope = getDoctorFilter(req);
 
-    // If linked to inventory item or found by title, automatically update inventory stock
+    // If linked to inventory item or found by title, update stock scoped to this doctor
     let item = null;
     if (inventoryId && isValidObjectId(inventoryId)) {
-      item = await Inventory.findById(inventoryId);
+      item = await Inventory.findOne({ _id: inventoryId, ...doctorScope });
     } else if (title && typeof title === 'string') {
-      item = await Inventory.findOne({ productName: new RegExp(`^${escapeRegex(title.trim())}$`, 'i') });
+      item = await Inventory.findOne({
+        ...doctorScope,
+        productName: new RegExp(`^${escapeRegex(title.trim())}$`, 'i')
+      });
     }
 
     if (item) {
@@ -241,25 +253,28 @@ const recordStockTransaction = async (req, res, next) => {
   }
 };
 
-// @desc    Get all inventory transactions
+// @desc    Get all inventory transactions (doctor-isolated)
 // @route   GET /api/inventory/transactions
-// @access  Public / Protected
+// @access  Protected
 const getAllTransactions = async (req, res, next) => {
   try {
     const { type, q } = req.query;
 
-    const filter = {};
+    const filter = getDoctorFilter(req);
     if (type && type !== 'All') {
       filter.type = type;
     }
 
     if (q && typeof q === 'string' && q.trim()) {
       const regex = new RegExp(escapeRegex(q.trim()), 'i');
-      filter.$or = [
-        { title: regex },
-        { category: regex },
-        { remarks: regex }
-      ];
+      filter.$and = filter.$and || [];
+      filter.$and.push({
+        $or: [
+          { title: regex },
+          { category: regex },
+          { remarks: regex }
+        ]
+      });
     }
 
     const transactions = await InventoryTransaction.find(filter).sort({ date: -1, createdAt: -1 });
@@ -278,14 +293,14 @@ const getAllTransactions = async (req, res, next) => {
 
 // ================= PURCHASE ORDERS =================
 
-// @desc    Get all purchase orders
+// @desc    Get all purchase orders (doctor-isolated)
 // @route   GET /api/inventory/purchase-orders
-// @access  Public / Protected
+// @access  Protected
 const getAllPurchaseOrders = async (req, res, next) => {
   try {
     const { status, vendor } = req.query;
 
-    const filter = {};
+    const filter = getDoctorFilter(req);
     if (status && status !== 'All') filter.status = status;
     if (vendor && typeof vendor === 'string' && vendor.trim()) {
       filter.vendor = new RegExp(escapeRegex(vendor.trim()), 'i');
@@ -305,7 +320,7 @@ const getAllPurchaseOrders = async (req, res, next) => {
 
 // @desc    Create purchase order
 // @route   POST /api/inventory/purchase-orders
-// @access  Public / Protected
+// @access  Protected
 const createPurchaseOrder = async (req, res, next) => {
   try {
     const { vendor, subtitle, date, status, items, totalAmount } = req.body;
@@ -339,7 +354,7 @@ const createPurchaseOrder = async (req, res, next) => {
 
 // @desc    Update purchase order status
 // @route   PATCH /api/inventory/purchase-orders/:id/status
-// @access  Public / Protected
+// @access  Protected
 const updatePurchaseOrderStatus = async (req, res, next) => {
   try {
     const { status } = req.body;
@@ -351,18 +366,17 @@ const updatePurchaseOrderStatus = async (req, res, next) => {
       });
     }
 
-    const po = await PurchaseOrder.findByIdAndUpdate(
-      req.params.id,
-      { status },
-      { new: true, runValidators: true }
-    );
+    const po = await PurchaseOrder.findById(req.params.id);
 
-    if (!po) {
+    if (!po || !isOwnerOrAdmin(req, po)) {
       return res.status(404).json({
         success: false,
         message: 'Purchase order not found'
       });
     }
+
+    po.status = status;
+    await po.save();
 
     res.status(200).json({
       success: true,

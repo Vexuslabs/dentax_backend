@@ -7,17 +7,19 @@ import {
   deleteNotification,
   createNotification
 } from '../controller/notificationController.js';
-import { optionalAuth } from '../middleware/auth.js';
+import { protect } from '../middleware/auth.js';
 
 const router = express.Router();
 
-router.use(optionalAuth);
+router.use(protect);
 
-router.get('/', getNotifications);
-router.post('/', createNotification);
+router.route('/')
+  .get(getNotifications)
+  .post(createNotification)
+  .delete(clearAllNotifications);
+
 router.patch('/read-all', markAllAsRead);
 router.patch('/:id/read', markAsRead);
-router.delete('/', clearAllNotifications);
 router.delete('/:id', deleteNotification);
 
 export default router;

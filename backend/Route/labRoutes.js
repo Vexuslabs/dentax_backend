@@ -6,11 +6,11 @@ import {
   updateLabOrder,
   deleteLabOrder
 } from '../controller/labController.js';
-import { optionalAuth } from '../middleware/auth.js';
+import { protect } from '../middleware/auth.js';
 
 const router = express.Router();
 
-router.use(optionalAuth);
+router.use(protect);
 
 router.route('/')
   .post(createLabOrder)

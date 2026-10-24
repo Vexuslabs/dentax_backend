@@ -4,11 +4,11 @@ import Appointment from '../model/Appointment.js';
 import Bill from '../model/Bill.js';
 import Prescription from '../model/Prescription.js';
 import DentalChart from '../model/DentalChart.js';
-import { escapeRegex, isValidObjectId } from '../utils/helpers.js';
+import { escapeRegex, isValidObjectId, getDoctorFilter, isOwnerOrAdmin } from '../utils/helpers.js';
 
 // @desc    Create new patient
 // @route   POST /api/patients
-// @access  Public / Protected
+// @access  Protected
 const createPatient = async (req, res, next) => {
   try {
     const {
@@ -56,48 +56,49 @@ const createPatient = async (req, res, next) => {
   }
 };
 
-// @desc    Get all patients with filters & search
+// @desc    Get all patients with filters & search (doctor-isolated)
 // @route   GET /api/patients
-// @access  Public / Protected
+// @access  Protected
 const getAllPatients = async (req, res, next) => {
   try {
     const { q, gender, startDate, endDate, sort, order } = req.query;
 
     const andConditions = [];
 
-    // Scope to user if authenticated
-    if (req.user) {
-      andConditions.push({ $or: [{ user: req.user.id }, { user: null }] });
-    }
+    // Strictly scope to current authenticated doctor
+    const doctorQuery = getDoctorFilter(req);
+    andConditions.push(doctorQuery);
 
-    // Search query for name or mobile number
+    // Search query for name, mobile number, adhar
     if (q && typeof q === 'string' && q.trim()) {
       const searchRegex = new RegExp(escapeRegex(q.trim()), 'i');
       andConditions.push({
         $or: [
           { name: searchRegex },
-          { mobileNumber: searchRegex }
+          { mobileNumber: searchRegex },
+          { 'personalInfo.adharNumber': searchRegex }
         ]
       });
     }
 
-    const filter = andConditions.length > 0 ? { $and: andConditions } : {};
-
     // Gender filter
     if (gender && gender !== 'All') {
-      filter.gender = gender;
+      andConditions.push({ gender });
     }
 
     // Date range filter
     if (startDate || endDate) {
-      filter.createdAt = {};
-      if (startDate) filter.createdAt.$gte = new Date(startDate);
+      const dateCondition = {};
+      if (startDate) dateCondition.$gte = new Date(startDate);
       if (endDate) {
         const end = new Date(endDate);
         end.setHours(23, 59, 59, 999);
-        filter.createdAt.$lte = end;
+        dateCondition.$lte = end;
       }
+      andConditions.push({ createdAt: dateCondition });
     }
+
+    const filter = andConditions.length > 0 ? { $and: andConditions } : {};
 
     // Sorting
     let sortOptions = { createdAt: -1 };
@@ -122,7 +123,7 @@ const getAllPatients = async (req, res, next) => {
 
 // @desc    Get patient by ID with complete clinical dossier
 // @route   GET /api/patients/:id
-// @access  Public / Protected
+// @access  Protected
 const getPatientById = async (req, res, next) => {
   try {
     if (!isValidObjectId(req.params.id)) {
@@ -134,19 +135,33 @@ const getPatientById = async (req, res, next) => {
 
     const patient = await Patient.findById(req.params.id);
 
-    if (!patient) {
+    if (!patient || !isOwnerOrAdmin(req, patient)) {
       return res.status(404).json({
         success: false,
         message: 'Patient not found'
       });
     }
 
-    // Fetch related clinical records
+    const doctorScope = getDoctorFilter(req);
+
+    // Fetch related clinical records linked by patient ID and doctor scope
     const [visits, appointments, bills, prescriptions, dentalChart] = await Promise.all([
-      PatientVisit.find({ $or: [{ patient: patient._id }, { patientName: patient.name }] }).sort({ createdAt: -1 }),
-      Appointment.find({ $or: [{ patient: patient._id }, { patientName: patient.name }] }).sort({ appointmentDate: -1 }),
-      Bill.find({ $or: [{ patient: patient._id }, { patientName: patient.name }] }).sort({ createdAt: -1 }),
-      Prescription.find({ $or: [{ patient: patient._id }, { patientName: patient.name }] }).sort({ createdAt: -1 }),
+      PatientVisit.find({
+        ...doctorScope,
+        $or: [{ patient: patient._id }, { patientName: patient.name }]
+      }).sort({ createdAt: -1 }),
+      Appointment.find({
+        ...doctorScope,
+        $or: [{ patient: patient._id }, { patientName: patient.name }]
+      }).sort({ appointmentDate: -1 }),
+      Bill.find({
+        ...doctorScope,
+        $or: [{ patient: patient._id }, { patientName: patient.name }]
+      }).sort({ createdAt: -1 }),
+      Prescription.find({
+        ...doctorScope,
+        $or: [{ patient: patient._id }, { patientName: patient.name }]
+      }).sort({ createdAt: -1 }),
       DentalChart.findOne({ patient: patient._id })
     ]);
 
@@ -168,7 +183,7 @@ const getPatientById = async (req, res, next) => {
 
 // @desc    Update patient
 // @route   PUT /api/patients/:id
-// @access  Public / Protected
+// @access  Protected
 const updatePatient = async (req, res, next) => {
   try {
     if (!isValidObjectId(req.params.id)) {
@@ -178,25 +193,27 @@ const updatePatient = async (req, res, next) => {
       });
     }
 
-    const updateData = { ...req.body };
-    delete updateData.user; // Protect against user reassignment
+    const patient = await Patient.findById(req.params.id);
 
-    const patient = await Patient.findByIdAndUpdate(req.params.id, updateData, {
-      new: true,
-      runValidators: true
-    });
-
-    if (!patient) {
+    if (!patient || !isOwnerOrAdmin(req, patient)) {
       return res.status(404).json({
         success: false,
         message: 'Patient not found'
       });
     }
 
+    const updateData = { ...req.body };
+    delete updateData.user; // Protect against doctor reassignment
+
+    const updatedPatient = await Patient.findByIdAndUpdate(req.params.id, updateData, {
+      new: true,
+      runValidators: true
+    });
+
     res.status(200).json({
       success: true,
       message: 'Patient updated successfully',
-      data: patient
+      data: updatedPatient
     });
   } catch (error) {
     next(error);
@@ -205,7 +222,7 @@ const updatePatient = async (req, res, next) => {
 
 // @desc    Delete patient
 // @route   DELETE /api/patients/:id
-// @access  Public / Protected
+// @access  Protected
 const deletePatient = async (req, res, next) => {
   try {
     if (!isValidObjectId(req.params.id)) {
@@ -215,14 +232,16 @@ const deletePatient = async (req, res, next) => {
       });
     }
 
-    const patient = await Patient.findByIdAndDelete(req.params.id);
+    const patient = await Patient.findById(req.params.id);
 
-    if (!patient) {
+    if (!patient || !isOwnerOrAdmin(req, patient)) {
       return res.status(404).json({
         success: false,
         message: 'Patient not found'
       });
     }
+
+    await patient.deleteOne();
 
     res.status(200).json({
       success: true,
@@ -235,7 +254,7 @@ const deletePatient = async (req, res, next) => {
 
 // @desc    Get patient dental chart (odontogram)
 // @route   GET /api/patients/:id/dental-chart
-// @access  Public / Protected
+// @access  Protected
 const getDentalChart = async (req, res, next) => {
   try {
     if (!isValidObjectId(req.params.id)) {
@@ -246,7 +265,7 @@ const getDentalChart = async (req, res, next) => {
     }
 
     const patient = await Patient.findById(req.params.id);
-    if (!patient) {
+    if (!patient || !isOwnerOrAdmin(req, patient)) {
       return res.status(404).json({
         success: false,
         message: 'Patient not found'
@@ -272,7 +291,7 @@ const getDentalChart = async (req, res, next) => {
 
 // @desc    Update patient dental chart (odontogram)
 // @route   PUT /api/patients/:id/dental-chart
-// @access  Public / Protected
+// @access  Protected
 const updateDentalChart = async (req, res, next) => {
   try {
     if (!isValidObjectId(req.params.id)) {
@@ -283,7 +302,7 @@ const updateDentalChart = async (req, res, next) => {
     }
 
     const patient = await Patient.findById(req.params.id);
-    if (!patient) {
+    if (!patient || !isOwnerOrAdmin(req, patient)) {
       return res.status(404).json({
         success: false,
         message: 'Patient not found'
@@ -351,4 +370,3 @@ export default {
   getDentalChart,
   updateDentalChart
 };
-

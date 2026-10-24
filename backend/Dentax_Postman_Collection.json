@@ -404,6 +404,10 @@
                   "    pm.collectionVariables.set(\"accessToken\", jsonData.token);",
                   "    console.log(\"Captured JWT Token from Register:\", jsonData.token);",
                   "}",
+                  "if (jsonData.refreshToken) {",
+                  "    pm.environment.set(\"refreshToken\", jsonData.refreshToken);",
+                  "    pm.collectionVariables.set(\"refreshToken\", jsonData.refreshToken);",
+                  "}",
                   "if (jsonData.user && jsonData.user._id) {",
                   "    pm.environment.set(\"userId\", jsonData.user._id);",
                   "}"
@@ -556,6 +560,10 @@
                   "    pm.environment.set(\"accessToken\", jsonData.token);",
                   "    pm.collectionVariables.set(\"accessToken\", jsonData.token);",
                   "    console.log(\"Captured JWT accessToken:\", jsonData.token);",
+                  "}",
+                  "if (jsonData.refreshToken) {",
+                  "    pm.environment.set(\"refreshToken\", jsonData.refreshToken);",
+                  "    pm.collectionVariables.set(\"refreshToken\", jsonData.refreshToken);",
                   "}",
                   "if (jsonData.user && jsonData.user._id) {",
                   "    pm.environment.set(\"userId\", jsonData.user._id);",
@@ -1103,7 +1111,9 @@
                   "});",
                   "pm.environment.set(\"accessToken\", \"\");",
                   "pm.collectionVariables.set(\"accessToken\", \"\");",
-                  "console.log(\"Logged out. Access token cleared.\");"
+                  "pm.environment.set(\"refreshToken\", \"\");",
+                  "pm.collectionVariables.set(\"refreshToken\", \"\");",
+                  "console.log(\"Logged out. Access and refresh tokens cleared.\");"
                 ],
                 "type": "text/javascript"
               }

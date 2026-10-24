@@ -2,7 +2,7 @@ import Patient from '../model/Patient.js';
 import PatientVisit from '../model/PatientVisit.js';
 import Appointment from '../model/Appointment.js';
 import Bill from '../model/Bill.js';
-import { escapeRegex } from '../utils/helpers.js';
+import { escapeRegex, getDoctorFilter } from '../utils/helpers.js';
 
 // Helper to calculate date range bounds
 const getDateRangeBounds = (rangeLabel, customStart, customEnd) => {
@@ -59,9 +59,9 @@ const getDateRangeBounds = (rangeLabel, customStart, customEnd) => {
   return { start, end };
 };
 
-// @desc    Get dashboard summary statistics & analytics
+// @desc    Get dashboard summary statistics & analytics (doctor-isolated)
 // @route   GET /api/dashboard/summary
-// @access  Public / Protected
+// @access  Protected
 const getDashboardSummary = async (req, res, next) => {
   try {
     const { range, filter, startDate, endDate } = req.query;
@@ -69,6 +69,11 @@ const getDashboardSummary = async (req, res, next) => {
 
     const { start, end } = getDateRangeBounds(rangeLabel, startDate, endDate);
     const todayStr = new Date().toISOString().split('T')[0];
+
+    const doctorFilter = getDoctorFilter(req);
+    const userMatch = req.user && req.user.role !== 'Admin'
+      ? { user: req.user._id }
+      : {};
 
     const [
       newPatientsCount,
@@ -78,29 +83,48 @@ const getDashboardSummary = async (req, res, next) => {
       todaysAppointments,
       revenueSummary
     ] = await Promise.all([
-      // New patients created in date range
-      Patient.countDocuments({ createdAt: { $gte: start, $lte: end } }),
+      // New patients created in date range for current doctor
+      Patient.countDocuments({
+        ...doctorFilter,
+        createdAt: { $gte: start, $lte: end }
+      }),
 
-      // Patient visits conducted in date range
-      PatientVisit.countDocuments({ visitDate: { $gte: start, $lte: end } }),
+      // Patient visits conducted in date range for current doctor
+      PatientVisit.countDocuments({
+        ...doctorFilter,
+        visitDate: { $gte: start, $lte: end }
+      }),
 
-      // Total appointments in date range
+      // Total appointments in date range for current doctor
       Appointment.countDocuments({
+        ...doctorFilter,
         appointmentDate: {
           $gte: start.toISOString().split('T')[0],
           $lte: end.toISOString().split('T')[0]
         }
       }),
 
-      // Missed appointments
-      Appointment.countDocuments({ status: 'Missed' }),
+      // Missed appointments for current doctor
+      Appointment.countDocuments({
+        ...doctorFilter,
+        status: 'Missed'
+      }),
 
-      // Today's scheduled appointments list
-      Appointment.find({ appointmentDate: todayStr }).sort({ appointmentTime: 1 }),
+      // Today's scheduled appointments list for current doctor
+      Appointment.find({
+        ...doctorFilter,
+        appointmentDate: todayStr
+      }).sort({ appointmentTime: 1 }),
 
-      // Revenue aggregate for the period
+      // Revenue aggregate for current doctor for the period
       Bill.aggregate([
-        { $match: { createdAt: { $gte: start, $lte: end }, status: 'Paid' } },
+        {
+          $match: {
+            ...userMatch,
+            createdAt: { $gte: start, $lte: end },
+            status: 'Paid'
+          }
+        },
         { $group: { _id: null, totalRevenue: { $sum: '$totalAmount' } } }
       ])
     ]);
@@ -125,9 +149,9 @@ const getDashboardSummary = async (req, res, next) => {
   }
 };
 
-// @desc    Global patient search for quick top bar
+// @desc    Global patient search for quick top bar (doctor-isolated)
 // @route   GET /api/dashboard/search
-// @access  Public / Protected
+// @access  Protected
 const searchPatients = async (req, res, next) => {
   try {
     const { q } = req.query;
@@ -141,7 +165,10 @@ const searchPatients = async (req, res, next) => {
     }
 
     const regex = new RegExp(escapeRegex(q.trim()), 'i');
+    const doctorFilter = getDoctorFilter(req);
+
     const patients = await Patient.find({
+      ...doctorFilter,
       $or: [
         { name: regex },
         { mobileNumber: regex },

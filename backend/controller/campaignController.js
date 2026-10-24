@@ -1,11 +1,11 @@
 import Campaign from '../model/Campaign.js';
 import Patient from '../model/Patient.js';
 import messagingService from '../utils/messagingService.js';
-import { isValidObjectId } from '../utils/helpers.js';
+import { isValidObjectId, getDoctorFilter, isOwnerOrAdmin } from '../utils/helpers.js';
 
 // @desc    Create new campaign
 // @route   POST /api/campaigns
-// @access  Public / Protected
+// @access  Protected
 const createCampaign = async (req, res, next) => {
   try {
     const {
@@ -59,9 +59,14 @@ const createCampaign = async (req, res, next) => {
       scheduleDate: scheduleDate ? new Date(scheduleDate) : null
     });
 
-    // If campaign is marked as Sent, trigger live transmission
+    // If campaign is marked as Sent, trigger live transmission to current doctor's patients
     if (resolvedStatus === 'Sent') {
-      const recipientQuery = { mobileNumber: { $exists: true, $ne: '' } };
+      const doctorFilter = getDoctorFilter(req);
+      const recipientQuery = {
+        ...doctorFilter,
+        mobileNumber: { $exists: true, $ne: '' }
+      };
+
       if (sendTo && sendTo !== 'All Patients' && sendTo !== 'All') {
         recipientQuery.$or = [
           { 'preferences.group': sendTo },
@@ -98,14 +103,14 @@ const createCampaign = async (req, res, next) => {
   }
 };
 
-// @desc    Get all campaigns
+// @desc    Get all campaigns (doctor-isolated)
 // @route   GET /api/campaigns
-// @access  Public / Protected
+// @access  Protected
 const getAllCampaigns = async (req, res, next) => {
   try {
     const { type, status } = req.query;
 
-    const filter = {};
+    const filter = getDoctorFilter(req);
     if (type) filter.campaignType = type;
     if (status) filter.status = status;
 
@@ -123,7 +128,7 @@ const getAllCampaigns = async (req, res, next) => {
 
 // @desc    Get campaign by ID
 // @route   GET /api/campaigns/:id
-// @access  Public / Protected
+// @access  Protected
 const getCampaignById = async (req, res, next) => {
   try {
     if (!isValidObjectId(req.params.id)) {
@@ -135,7 +140,7 @@ const getCampaignById = async (req, res, next) => {
 
     const campaign = await Campaign.findById(req.params.id);
 
-    if (!campaign) {
+    if (!campaign || !isOwnerOrAdmin(req, campaign)) {
       return res.status(404).json({
         success: false,
         message: 'Campaign not found'
@@ -153,7 +158,7 @@ const getCampaignById = async (req, res, next) => {
 
 // @desc    Update campaign
 // @route   PUT /api/campaigns/:id
-// @access  Public / Protected
+// @access  Protected
 const updateCampaign = async (req, res, next) => {
   try {
     if (!isValidObjectId(req.params.id)) {
@@ -163,22 +168,27 @@ const updateCampaign = async (req, res, next) => {
       });
     }
 
-    const campaign = await Campaign.findByIdAndUpdate(req.params.id, req.body, {
-      new: true,
-      runValidators: true
-    });
+    const campaign = await Campaign.findById(req.params.id);
 
-    if (!campaign) {
+    if (!campaign || !isOwnerOrAdmin(req, campaign)) {
       return res.status(404).json({
         success: false,
         message: 'Campaign not found'
       });
     }
 
+    const updateData = { ...req.body };
+    delete updateData.user;
+
+    const updatedCampaign = await Campaign.findByIdAndUpdate(req.params.id, updateData, {
+      new: true,
+      runValidators: true
+    });
+
     res.status(200).json({
       success: true,
       message: 'Campaign updated successfully',
-      data: campaign
+      data: updatedCampaign
     });
   } catch (error) {
     next(error);
@@ -187,7 +197,7 @@ const updateCampaign = async (req, res, next) => {
 
 // @desc    Delete campaign
 // @route   DELETE /api/campaigns/:id
-// @access  Public / Protected
+// @access  Protected
 const deleteCampaign = async (req, res, next) => {
   try {
     if (!isValidObjectId(req.params.id)) {
@@ -197,14 +207,16 @@ const deleteCampaign = async (req, res, next) => {
       });
     }
 
-    const campaign = await Campaign.findByIdAndDelete(req.params.id);
+    const campaign = await Campaign.findById(req.params.id);
 
-    if (!campaign) {
+    if (!campaign || !isOwnerOrAdmin(req, campaign)) {
       return res.status(404).json({
         success: false,
         message: 'Campaign not found'
       });
     }
+
+    await campaign.deleteOne();
 
     res.status(200).json({
       success: true,

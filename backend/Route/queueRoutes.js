@@ -6,17 +6,21 @@ import {
   getQueueById,
   deleteQueueToken
 } from '../controller/queueController.js';
-import { optionalAuth } from '../middleware/auth.js';
+import { protect } from '../middleware/auth.js';
 
 const router = express.Router();
 
-router.use(optionalAuth);
+router.use(protect);
 
 router.get('/today', getTodaysQueue);
-router.get('/', getTodaysQueue);
-router.post('/', issueToken);
-router.get('/:id', getQueueById);
 router.patch('/:id/status', updateQueueStatus);
-router.delete('/:id', deleteQueueToken);
+
+router.route('/')
+  .post(issueToken)
+  .get(getTodaysQueue);
+
+router.route('/:id')
+  .get(getQueueById)
+  .delete(deleteQueueToken);
 
 export default router;

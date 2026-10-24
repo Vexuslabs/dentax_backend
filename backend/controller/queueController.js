@@ -1,6 +1,6 @@
 import Queue from '../model/Queue.js';
 import Patient from '../model/Patient.js';
-import { isValidObjectId } from '../utils/helpers.js';
+import { isValidObjectId, getDoctorFilter, isOwnerOrAdmin } from '../utils/helpers.js';
 
 // Status normalizer helper
 const normalizeQueueStatus = (status) => {
@@ -13,19 +13,22 @@ const normalizeQueueStatus = (status) => {
   return status;
 };
 
-// @desc    Get today's walk-in queue
+// @desc    Get today's walk-in queue (doctor-isolated)
 // @route   GET /api/queue/today or GET /api/queue
-// @access  Public / Protected
+// @access  Protected
 const getTodaysQueue = async (req, res, next) => {
   try {
     const todayStr = new Date().toISOString().split('T')[0];
-    const { status, date, doctorName } = req.query;
+    const { status, date, doctorName, patientId } = req.query;
 
     const queryDate = date || todayStr;
-    const filter = { date: queryDate };
+    const filter = {
+      ...getDoctorFilter(req),
+      date: queryDate
+    };
 
-    if (req.user) {
-      filter.$or = [{ user: req.user.id }, { user: null }];
+    if (patientId && isValidObjectId(patientId)) {
+      filter.patient = patientId;
     }
 
     if (status && typeof status === 'string' && status.trim()) {
@@ -36,7 +39,7 @@ const getTodaysQueue = async (req, res, next) => {
       filter.doctorName = new RegExp(doctorName.trim(), 'i');
     }
 
-    const queue = await Queue.find(filter).sort({ tokenNumber: 1 });
+    const queue = await Queue.find(filter).populate('patient').sort({ tokenNumber: 1 });
 
     const waitingCount = queue.filter((q) => q.status === 'Waiting').length;
     const inConsultationCount = queue.filter((q) => q.status === 'In-Consultation').length;
@@ -58,12 +61,14 @@ const getTodaysQueue = async (req, res, next) => {
   }
 };
 
-// @desc    Issue new token to walk-in patient
+// @desc    Issue new token to walk-in patient (doctor-isolated, ID-linked)
 // @route   POST /api/queue
-// @access  Public / Protected
+// @access  Protected
 const issueToken = async (req, res, next) => {
   try {
     const {
+      patientId,
+      patient: patientInputId,
       patientName,
       name,
       phoneNumber,
@@ -77,46 +82,71 @@ const issueToken = async (req, res, next) => {
       date
     } = req.body;
 
-    const resolvedName = (patientName || name || '').trim();
-    const resolvedPhone = (phoneNumber || mobileNumber || phone || '').trim();
+    let resolvedName = (patientName || name || '').trim();
+    let resolvedPhone = (phoneNumber || mobileNumber || phone || '').trim();
 
-    if (!resolvedName || !resolvedPhone) {
-      return res.status(400).json({
-        success: false,
-        message: 'Patient name and phone number are required to issue a token.'
+    const targetPatientId = patientId || patientInputId;
+    let resolvedPatient = null;
+
+    if (targetPatientId) {
+      if (!isValidObjectId(targetPatientId)) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid patient ID format: ${targetPatientId}`
+        });
+      }
+
+      resolvedPatient = await Patient.findById(targetPatientId);
+      if (!resolvedPatient || !isOwnerOrAdmin(req, resolvedPatient)) {
+        return res.status(404).json({
+          success: false,
+          message: 'Patient not found or not authorized to access this patient.'
+        });
+      }
+
+      if (!resolvedName) resolvedName = resolvedPatient.name;
+      if (!resolvedPhone) resolvedPhone = resolvedPatient.mobileNumber;
+    } else {
+      if (!resolvedName || !resolvedPhone) {
+        return res.status(400).json({
+          success: false,
+          message: 'Patient name and phone number (or a valid patientId) are required to issue a token.'
+        });
+      }
+
+      const doctorQuery = getDoctorFilter(req);
+      resolvedPatient = await Patient.findOne({
+        ...doctorQuery,
+        $or: [{ name: resolvedName }, { mobileNumber: resolvedPhone }]
       });
+
+      if (!resolvedPatient) {
+        resolvedPatient = await Patient.create({
+          user: req.user ? req.user.id : null,
+          name: resolvedName,
+          mobileNumber: resolvedPhone,
+          dob: '2000-01-01',
+          gender: 'Male'
+        });
+      }
     }
 
     const todayStr = date || new Date().toISOString().split('T')[0];
 
-    // Find highest token number for this date
-    const lastToken = await Queue.findOne({ date: todayStr }).sort({ tokenNumber: -1 });
+    // Find highest token number for this doctor on this date
+    const doctorScope = getDoctorFilter(req);
+    const lastToken = await Queue.findOne({ ...doctorScope, date: todayStr }).sort({ tokenNumber: -1 });
     const nextTokenNumber = (lastToken?.tokenNumber || 0) + 1;
-
-    // Auto-link or create patient record if new
-    let patient = await Patient.findOne({
-      $or: [{ name: resolvedName }, { mobileNumber: resolvedPhone }]
-    });
-
-    if (!patient) {
-      patient = await Patient.create({
-        user: req.user ? req.user.id : null,
-        name: resolvedName,
-        mobileNumber: resolvedPhone,
-        dob: '2000-01-01',
-        gender: 'Male'
-      });
-    }
 
     const queueItem = await Queue.create({
       user: req.user ? req.user.id : null,
-      patient: patient._id,
+      patient: resolvedPatient._id,
       tokenNumber: nextTokenNumber,
       patientName: resolvedName,
       phoneNumber: resolvedPhone,
       date: todayStr,
       department: department || 'Dental',
-      doctorName: (doctorName || doctor || 'Dr. Self').trim(),
+      doctorName: (doctorName || doctor || req.user?.name || 'Dr. Self').trim(),
       status: 'Waiting',
       estimatedWaitMinutes: Number(estimatedWaitMinutes) || 15,
       notes: (notes || '').trim()
@@ -132,9 +162,9 @@ const issueToken = async (req, res, next) => {
   }
 };
 
-// @desc    Update walk-in queue status (Waiting -> In-Consultation -> Completed)
+// @desc    Update walk-in queue status
 // @route   PATCH /api/queue/:id/status
-// @access  Public / Protected
+// @access  Protected
 const updateQueueStatus = async (req, res, next) => {
   try {
     const { status } = req.body;
@@ -153,20 +183,18 @@ const updateQueueStatus = async (req, res, next) => {
       });
     }
 
-    const normalized = normalizeQueueStatus(status);
+    const queueItem = await Queue.findById(req.params.id);
 
-    const queueItem = await Queue.findByIdAndUpdate(
-      req.params.id,
-      { status: normalized },
-      { new: true, runValidators: true }
-    );
-
-    if (!queueItem) {
+    if (!queueItem || !isOwnerOrAdmin(req, queueItem)) {
       return res.status(404).json({
         success: false,
         message: 'Queue entry not found'
       });
     }
+
+    const normalized = normalizeQueueStatus(status);
+    queueItem.status = normalized;
+    await queueItem.save();
 
     res.status(200).json({
       success: true,
@@ -180,7 +208,7 @@ const updateQueueStatus = async (req, res, next) => {
 
 // @desc    Get queue item by ID
 // @route   GET /api/queue/:id
-// @access  Public / Protected
+// @access  Protected
 const getQueueById = async (req, res, next) => {
   try {
     if (!isValidObjectId(req.params.id)) {
@@ -190,9 +218,9 @@ const getQueueById = async (req, res, next) => {
       });
     }
 
-    const queueItem = await Queue.findById(req.params.id);
+    const queueItem = await Queue.findById(req.params.id).populate('patient');
 
-    if (!queueItem) {
+    if (!queueItem || !isOwnerOrAdmin(req, queueItem)) {
       return res.status(404).json({
         success: false,
         message: 'Queue entry not found'
@@ -210,7 +238,7 @@ const getQueueById = async (req, res, next) => {
 
 // @desc    Delete / Cancel queue entry
 // @route   DELETE /api/queue/:id
-// @access  Public / Protected
+// @access  Protected
 const deleteQueueToken = async (req, res, next) => {
   try {
     if (!isValidObjectId(req.params.id)) {
@@ -220,14 +248,16 @@ const deleteQueueToken = async (req, res, next) => {
       });
     }
 
-    const queueItem = await Queue.findByIdAndDelete(req.params.id);
+    const queueItem = await Queue.findById(req.params.id);
 
-    if (!queueItem) {
+    if (!queueItem || !isOwnerOrAdmin(req, queueItem)) {
       return res.status(404).json({
         success: false,
         message: 'Queue entry not found'
       });
     }
+
+    await queueItem.deleteOne();
 
     res.status(200).json({
       success: true,

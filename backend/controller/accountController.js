@@ -1,9 +1,9 @@
 import Account from '../model/Account.js';
-import { escapeRegex, isValidObjectId } from '../utils/helpers.js';
+import { escapeRegex, isValidObjectId, getDoctorFilter, isOwnerOrAdmin } from '../utils/helpers.js';
 
 // @desc    Record new transaction (Income / Expense)
 // @route   POST /api/accounts
-// @access  Public / Protected
+// @access  Protected
 const createTransaction = async (req, res, next) => {
   try {
     const { type, title, category, amount, description, date } = req.body;
@@ -42,14 +42,14 @@ const createTransaction = async (req, res, next) => {
   }
 };
 
-// @desc    Get all transactions with optional filters
+// @desc    Get all transactions with optional filters (doctor-isolated)
 // @route   GET /api/accounts
-// @access  Public / Protected
+// @access  Protected
 const getAllTransactions = async (req, res, next) => {
   try {
     const { type, category, startDate, endDate, q } = req.query;
 
-    const filter = {};
+    const filter = getDoctorFilter(req);
 
     if (type && type !== 'all') {
       filter.type = type.toLowerCase();
@@ -61,11 +61,14 @@ const getAllTransactions = async (req, res, next) => {
 
     if (q && typeof q === 'string' && q.trim()) {
       const regex = new RegExp(escapeRegex(q.trim()), 'i');
-      filter.$or = [
-        { title: regex },
-        { category: regex },
-        { description: regex }
-      ];
+      filter.$and = filter.$and || [];
+      filter.$and.push({
+        $or: [
+          { title: regex },
+          { category: regex },
+          { description: regex }
+        ]
+      });
     }
 
     if (startDate || endDate) {
@@ -90,14 +93,18 @@ const getAllTransactions = async (req, res, next) => {
   }
 };
 
-// @desc    Get account balance and financial summary
+// @desc    Get account balance and financial summary (doctor-isolated)
 // @route   GET /api/accounts/summary
-// @access  Public / Protected
+// @access  Protected
 const getAccountSummary = async (req, res, next) => {
   try {
     const { startDate, endDate } = req.query;
 
-    const matchStage = {};
+    const userMatch = req.user && req.user.role !== 'Admin'
+      ? { user: req.user._id }
+      : {};
+
+    const matchStage = { ...userMatch };
     if (startDate || endDate) {
       matchStage.date = {};
       if (startDate) matchStage.date.$gte = new Date(startDate);
@@ -156,7 +163,7 @@ const getAccountSummary = async (req, res, next) => {
 
 // @desc    Delete transaction
 // @route   DELETE /api/accounts/:id
-// @access  Public / Protected
+// @access  Protected
 const deleteTransaction = async (req, res, next) => {
   try {
     if (!isValidObjectId(req.params.id)) {
@@ -166,14 +173,16 @@ const deleteTransaction = async (req, res, next) => {
       });
     }
 
-    const transaction = await Account.findByIdAndDelete(req.params.id);
+    const transaction = await Account.findById(req.params.id);
 
-    if (!transaction) {
+    if (!transaction || !isOwnerOrAdmin(req, transaction)) {
       return res.status(404).json({
         success: false,
         message: 'Transaction not found'
       });
     }
+
+    await transaction.deleteOne();
 
     res.status(200).json({
       success: true,

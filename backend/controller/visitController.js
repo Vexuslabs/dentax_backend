@@ -1,17 +1,20 @@
 import PatientVisit from '../model/PatientVisit.js';
 import Patient from '../model/Patient.js';
-import { escapeRegex, isValidObjectId } from '../utils/helpers.js';
+import { escapeRegex, isValidObjectId, getDoctorFilter, isOwnerOrAdmin } from '../utils/helpers.js';
 
 // @desc    Create new patient visit
 // @route   POST /api/visits
-// @access  Public / Protected
+// @access  Protected
 const createVisit = async (req, res, next) => {
   try {
     const {
       patientId,
+      patient: patientInputId,
       patientName,
+      name,
       doctorName,
       mobileNumber,
+      phone,
       visitDate,
       visitTime,
       isNewPatient,
@@ -26,41 +29,64 @@ const createVisit = async (req, res, next) => {
       actualTreatmentDone
     } = req.body;
 
-    if (!patientName) {
-      return res.status(400).json({
-        success: false,
-        message: 'Patient name is required.'
-      });
-    }
+    let resolvedPatientName = (patientName || name || '').trim();
+    let resolvedMobile = (mobileNumber || phone || '').trim();
 
-    // Auto-link or create patient if not present
-    let resolvedPatientId = patientId;
-    if (!resolvedPatientId) {
-      let patient = await Patient.findOne({
+    const targetPatientId = patientId || patientInputId;
+    let resolvedPatient = null;
+
+    if (targetPatientId) {
+      if (!isValidObjectId(targetPatientId)) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid patient ID format: ${targetPatientId}`
+        });
+      }
+
+      resolvedPatient = await Patient.findById(targetPatientId);
+      if (!resolvedPatient || !isOwnerOrAdmin(req, resolvedPatient)) {
+        return res.status(404).json({
+          success: false,
+          message: 'Patient not found or not authorized to access this patient.'
+        });
+      }
+
+      if (!resolvedPatientName) resolvedPatientName = resolvedPatient.name;
+      if (!resolvedMobile) resolvedMobile = resolvedPatient.mobileNumber;
+    } else {
+      if (!resolvedPatientName) {
+        return res.status(400).json({
+          success: false,
+          message: 'Patient name or valid patientId is required.'
+        });
+      }
+
+      const doctorQuery = getDoctorFilter(req);
+      resolvedPatient = await Patient.findOne({
+        ...doctorQuery,
         $or: [
-          { name: patientName.trim() },
-          ...(mobileNumber ? [{ mobileNumber: mobileNumber.trim() }] : [])
+          { name: resolvedPatientName },
+          ...(resolvedMobile ? [{ mobileNumber: resolvedMobile }] : [])
         ]
       });
 
-      if (!patient) {
-        patient = await Patient.create({
+      if (!resolvedPatient) {
+        resolvedPatient = await Patient.create({
           user: req.user ? req.user.id : null,
-          name: patientName.trim(),
-          mobileNumber: mobileNumber ? mobileNumber.trim() : '0000000000',
+          name: resolvedPatientName,
+          mobileNumber: resolvedMobile || '0000000000',
           dob: '2000-01-01',
           gender: 'Male'
         });
       }
-      resolvedPatientId = patient._id;
     }
 
     const visit = await PatientVisit.create({
       user: req.user ? req.user.id : null,
-      patient: resolvedPatientId,
-      patientName: patientName.trim(),
-      doctorName: doctorName ? doctorName.trim() : 'Dr. Self',
-      mobileNumber: mobileNumber ? mobileNumber.trim() : '',
+      patient: resolvedPatient ? resolvedPatient._id : null,
+      patientName: resolvedPatientName,
+      doctorName: (doctorName || req.user?.name || 'Dr. Self').trim(),
+      mobileNumber: resolvedMobile,
       visitDate: visitDate ? new Date(visitDate) : new Date(),
       visitTime: visitTime || '10:00',
       isNewPatient: isNewPatient || false,
@@ -85,14 +111,14 @@ const createVisit = async (req, res, next) => {
   }
 };
 
-// @desc    Get all visits
+// @desc    Get all visits (doctor-isolated)
 // @route   GET /api/visits
-// @access  Public / Protected
+// @access  Protected
 const getAllVisits = async (req, res, next) => {
   try {
     const { patientId, patientName, doctorName, date, startDate, endDate } = req.query;
 
-    const filter = {};
+    const filter = getDoctorFilter(req);
 
     if (patientId && isValidObjectId(patientId)) filter.patient = patientId;
     if (patientName && typeof patientName === 'string' && patientName.trim()) {
@@ -117,7 +143,9 @@ const getAllVisits = async (req, res, next) => {
       }
     }
 
-    const visits = await PatientVisit.find(filter).sort({ visitDate: -1, createdAt: -1 });
+    const visits = await PatientVisit.find(filter)
+      .populate('patient')
+      .sort({ visitDate: -1, createdAt: -1 });
 
     res.status(200).json({
       success: true,
@@ -131,7 +159,7 @@ const getAllVisits = async (req, res, next) => {
 
 // @desc    Get visit by ID
 // @route   GET /api/visits/:id
-// @access  Public / Protected
+// @access  Protected
 const getVisitById = async (req, res, next) => {
   try {
     if (!isValidObjectId(req.params.id)) {
@@ -141,9 +169,9 @@ const getVisitById = async (req, res, next) => {
       });
     }
 
-    const visit = await PatientVisit.findById(req.params.id);
+    const visit = await PatientVisit.findById(req.params.id).populate('patient');
 
-    if (!visit) {
+    if (!visit || !isOwnerOrAdmin(req, visit)) {
       return res.status(404).json({
         success: false,
         message: 'Visit not found'
@@ -161,7 +189,7 @@ const getVisitById = async (req, res, next) => {
 
 // @desc    Update visit
 // @route   PUT /api/visits/:id
-// @access  Public / Protected
+// @access  Protected
 const updateVisit = async (req, res, next) => {
   try {
     if (!isValidObjectId(req.params.id)) {
@@ -171,22 +199,36 @@ const updateVisit = async (req, res, next) => {
       });
     }
 
-    const visit = await PatientVisit.findByIdAndUpdate(req.params.id, req.body, {
-      new: true,
-      runValidators: true
-    });
+    const visit = await PatientVisit.findById(req.params.id);
 
-    if (!visit) {
+    if (!visit || !isOwnerOrAdmin(req, visit)) {
       return res.status(404).json({
         success: false,
         message: 'Visit not found'
       });
     }
 
+    const updateData = { ...req.body };
+    delete updateData.user;
+
+    const { patientId, patient: patientInputId } = req.body;
+    const targetPatientId = patientId || patientInputId;
+    if (targetPatientId && isValidObjectId(targetPatientId)) {
+      const patientDoc = await Patient.findById(targetPatientId);
+      if (patientDoc && isOwnerOrAdmin(req, patientDoc)) {
+        updateData.patient = patientDoc._id;
+      }
+    }
+
+    const updatedVisit = await PatientVisit.findByIdAndUpdate(req.params.id, updateData, {
+      new: true,
+      runValidators: true
+    }).populate('patient');
+
     res.status(200).json({
       success: true,
       message: 'Visit updated successfully',
-      data: visit
+      data: updatedVisit
     });
   } catch (error) {
     next(error);
@@ -195,7 +237,7 @@ const updateVisit = async (req, res, next) => {
 
 // @desc    Delete visit
 // @route   DELETE /api/visits/:id
-// @access  Public / Protected
+// @access  Protected
 const deleteVisit = async (req, res, next) => {
   try {
     if (!isValidObjectId(req.params.id)) {
@@ -205,14 +247,16 @@ const deleteVisit = async (req, res, next) => {
       });
     }
 
-    const visit = await PatientVisit.findByIdAndDelete(req.params.id);
+    const visit = await PatientVisit.findById(req.params.id);
 
-    if (!visit) {
+    if (!visit || !isOwnerOrAdmin(req, visit)) {
       return res.status(404).json({
         success: false,
         message: 'Visit not found'
       });
     }
+
+    await visit.deleteOne();
 
     res.status(200).json({
       success: true,

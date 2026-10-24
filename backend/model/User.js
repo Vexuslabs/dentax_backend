@@ -115,7 +115,7 @@ userSchema.methods.matchPassword = async function (enteredPassword) {
   return await bcrypt.compare(enteredPassword, this.password);
 };
 
-// Generate JWT token
+// Generate JWT token (Access Token)
 userSchema.methods.getSignedJwtToken = function () {
   return jwt.sign(
     { id: this._id, role: this.role },
@@ -126,4 +126,16 @@ userSchema.methods.getSignedJwtToken = function () {
   );
 };
 
+// Generate Refresh Token
+userSchema.methods.getSignedRefreshToken = function () {
+  return jwt.sign(
+    { id: this._id, role: this.role },
+    process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET || 'dentalbox_super_secret_jwt_refresh_key_2026_secure',
+    {
+      expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '90d'
+    }
+  );
+};
+
 export default mongoose.model('User', userSchema);
+

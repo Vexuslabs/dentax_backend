@@ -1,13 +1,15 @@
 import Bill from '../model/Bill.js';
 import Patient from '../model/Patient.js';
-import { escapeRegex, isValidObjectId } from '../utils/helpers.js';
+import { escapeRegex, isValidObjectId, getDoctorFilter, isOwnerOrAdmin } from '../utils/helpers.js';
 
 // @desc    Create new bill (standard or quick bill)
 // @route   POST /api/bills
-// @access  Public / Protected
+// @access  Protected
 const createBill = async (req, res, next) => {
   try {
     const {
+      patientId,
+      patient: patientInputId,
       patientName,
       name,
       phoneNumber,
@@ -31,44 +33,71 @@ const createBill = async (req, res, next) => {
       invoiceNumber
     } = req.body;
 
-    const resolvedPatientName = (patientName || name || '').trim();
-    const resolvedPhone = (phoneNumber || phone || '').trim();
+    let resolvedPatientName = (patientName || name || '').trim();
+    let resolvedPhone = (phoneNumber || phone || '').trim();
 
-    if (!resolvedPatientName) {
-      return res.status(400).json({
-        success: false,
-        message: 'Patient name is required.'
+    const targetPatientId = patientId || patientInputId;
+    let resolvedPatient = null;
+
+    if (targetPatientId) {
+      if (!isValidObjectId(targetPatientId)) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid patient ID format: ${targetPatientId}`
+        });
+      }
+
+      resolvedPatient = await Patient.findById(targetPatientId);
+      if (!resolvedPatient || !isOwnerOrAdmin(req, resolvedPatient)) {
+        return res.status(404).json({
+          success: false,
+          message: 'Patient not found or not authorized to access this patient.'
+        });
+      }
+
+      if (!resolvedPatientName) resolvedPatientName = resolvedPatient.name;
+      if (!resolvedPhone) resolvedPhone = resolvedPatient.mobileNumber;
+    } else {
+      if (!resolvedPatientName) {
+        return res.status(400).json({
+          success: false,
+          message: 'Patient name or valid patientId is required.'
+        });
+      }
+
+      const doctorQuery = getDoctorFilter(req);
+      resolvedPatient = await Patient.findOne({
+        ...doctorQuery,
+        $or: [
+          { name: resolvedPatientName },
+          ...(resolvedPhone ? [{ mobileNumber: resolvedPhone }] : [])
+        ]
       });
+
+      if (!resolvedPatient && resolvedPhone) {
+        resolvedPatient = await Patient.create({
+          user: req.user ? req.user.id : null,
+          name: resolvedPatientName,
+          mobileNumber: resolvedPhone,
+          dob: '2000-01-01',
+          gender: 'Male'
+        });
+      }
     }
 
     const resolvedAmount = Number(amount !== undefined ? amount : (fees !== undefined ? fees : 0));
     const resolvedDiscount = Number(discount || 0);
-    const resolvedTotal = total !== undefined ? Number(total) : (totalAmount !== undefined ? Number(totalAmount) : (resolvedAmount - resolvedDiscount < 0 ? 0 : resolvedAmount - resolvedDiscount));
-
-    // Try linking patient
-    let patient = await Patient.findOne({
-      $or: [
-        { name: resolvedPatientName },
-        ...(resolvedPhone ? [{ mobileNumber: resolvedPhone }] : [])
-      ]
-    });
-
-    if (!patient && resolvedPhone) {
-      patient = await Patient.create({
-        user: req.user ? req.user.id : null,
-        name: resolvedPatientName,
-        mobileNumber: resolvedPhone,
-        dob: '2000-01-01',
-        gender: 'Male'
-      });
-    }
+    const resolvedTotal = total !== undefined
+      ? Number(total)
+      : (totalAmount !== undefined ? Number(totalAmount) : Math.max(0, resolvedAmount - resolvedDiscount));
 
     const bill = await Bill.create({
       user: req.user ? req.user.id : null,
-      patient: patient ? patient._id : null,
+      patient: resolvedPatient ? resolvedPatient._id : null,
       invoiceNumber,
       patientName: resolvedPatientName,
       phoneNumber: resolvedPhone,
+      doctorName: req.user?.name || 'Dr. Self',
       amount: resolvedAmount,
       discount: resolvedDiscount,
       totalAmount: resolvedTotal,
@@ -95,14 +124,18 @@ const createBill = async (req, res, next) => {
   }
 };
 
-// @desc    Get all bills with filters & search
+// @desc    Get all bills with filters & search (doctor-isolated)
 // @route   GET /api/bills
-// @access  Public / Protected
+// @access  Protected
 const getAllBills = async (req, res, next) => {
   try {
-    const { status, q, startDate, endDate, isQuickBill } = req.query;
+    const { status, q, startDate, endDate, isQuickBill, patientId } = req.query;
 
-    const filter = {};
+    const filter = getDoctorFilter(req);
+
+    if (patientId && isValidObjectId(patientId)) {
+      filter.patient = patientId;
+    }
 
     if (status && typeof status === 'string' && status !== 'All' && status.trim()) {
       filter.status = new RegExp(`^${escapeRegex(status.trim())}$`, 'i');
@@ -114,12 +147,15 @@ const getAllBills = async (req, res, next) => {
 
     if (q && typeof q === 'string' && q.trim()) {
       const regex = new RegExp(escapeRegex(q.trim()), 'i');
-      filter.$or = [
-        { patientName: regex },
-        { phoneNumber: regex },
-        { invoiceNumber: regex },
-        { notes: regex }
-      ];
+      filter.$and = filter.$and || [];
+      filter.$and.push({
+        $or: [
+          { patientName: regex },
+          { phoneNumber: regex },
+          { invoiceNumber: regex },
+          { notes: regex }
+        ]
+      });
     }
 
     if (startDate || endDate) {
@@ -132,7 +168,7 @@ const getAllBills = async (req, res, next) => {
       }
     }
 
-    const bills = await Bill.find(filter).sort({ createdAt: -1 });
+    const bills = await Bill.find(filter).populate('patient').sort({ createdAt: -1 });
 
     res.status(200).json({
       success: true,
@@ -146,7 +182,7 @@ const getAllBills = async (req, res, next) => {
 
 // @desc    Get bill by ID
 // @route   GET /api/bills/:id
-// @access  Public / Protected
+// @access  Protected
 const getBillById = async (req, res, next) => {
   try {
     if (!isValidObjectId(req.params.id)) {
@@ -156,9 +192,9 @@ const getBillById = async (req, res, next) => {
       });
     }
 
-    const bill = await Bill.findById(req.params.id);
+    const bill = await Bill.findById(req.params.id).populate('patient');
 
-    if (!bill) {
+    if (!bill || !isOwnerOrAdmin(req, bill)) {
       return res.status(404).json({
         success: false,
         message: 'Bill not found'
@@ -176,7 +212,7 @@ const getBillById = async (req, res, next) => {
 
 // @desc    Update bill (status, payment method, amount)
 // @route   PUT /api/bills/:id
-// @access  Public / Protected
+// @access  Protected
 const updateBill = async (req, res, next) => {
   try {
     if (!isValidObjectId(req.params.id)) {
@@ -186,22 +222,36 @@ const updateBill = async (req, res, next) => {
       });
     }
 
-    const bill = await Bill.findByIdAndUpdate(req.params.id, req.body, {
-      new: true,
-      runValidators: true
-    });
+    const bill = await Bill.findById(req.params.id);
 
-    if (!bill) {
+    if (!bill || !isOwnerOrAdmin(req, bill)) {
       return res.status(404).json({
         success: false,
         message: 'Bill not found'
       });
     }
 
+    const updateData = { ...req.body };
+    delete updateData.user;
+
+    const { patientId, patient: patientInputId } = req.body;
+    const targetPatientId = patientId || patientInputId;
+    if (targetPatientId && isValidObjectId(targetPatientId)) {
+      const patientDoc = await Patient.findById(targetPatientId);
+      if (patientDoc && isOwnerOrAdmin(req, patientDoc)) {
+        updateData.patient = patientDoc._id;
+      }
+    }
+
+    const updatedBill = await Bill.findByIdAndUpdate(req.params.id, updateData, {
+      new: true,
+      runValidators: true
+    }).populate('patient');
+
     res.status(200).json({
       success: true,
       message: 'Bill updated successfully',
-      data: bill
+      data: updatedBill
     });
   } catch (error) {
     next(error);
@@ -210,7 +260,7 @@ const updateBill = async (req, res, next) => {
 
 // @desc    Delete bill
 // @route   DELETE /api/bills/:id
-// @access  Public / Protected
+// @access  Protected
 const deleteBill = async (req, res, next) => {
   try {
     if (!isValidObjectId(req.params.id)) {
@@ -220,14 +270,16 @@ const deleteBill = async (req, res, next) => {
       });
     }
 
-    const bill = await Bill.findByIdAndDelete(req.params.id);
+    const bill = await Bill.findById(req.params.id);
 
-    if (!bill) {
+    if (!bill || !isOwnerOrAdmin(req, bill)) {
       return res.status(404).json({
         success: false,
         message: 'Bill not found'
       });
     }
+
+    await bill.deleteOne();
 
     res.status(200).json({
       success: true,
@@ -238,21 +290,26 @@ const deleteBill = async (req, res, next) => {
   }
 };
 
-// @desc    Get billing statistics
+// @desc    Get billing statistics (scoped to current doctor)
 // @route   GET /api/bills/stats
-// @access  Public / Protected
+// @access  Protected
 const getBillStats = async (req, res, next) => {
   try {
+    const userMatch = req.user && req.user.role !== 'Admin'
+      ? { user: req.user._id }
+      : {};
+
     const [totalBilled, paidBills, pendingBills] = await Promise.all([
       Bill.aggregate([
+        { $match: userMatch },
         { $group: { _id: null, total: { $sum: '$totalAmount' }, count: { $sum: 1 } } }
       ]),
       Bill.aggregate([
-        { $match: { status: 'Paid' } },
+        { $match: { ...userMatch, status: 'Paid' } },
         { $group: { _id: null, total: { $sum: '$totalAmount' }, count: { $sum: 1 } } }
       ]),
       Bill.aggregate([
-        { $match: { status: { $in: ['Pending', 'Partially Paid'] } } },
+        { $match: { ...userMatch, status: { $in: ['Pending', 'Partially Paid'] } } },
         { $group: { _id: null, total: { $sum: '$totalAmount' }, count: { $sum: 1 } } }
       ])
     ]);
